@@ -1,0 +1,136 @@
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = [ "setuptools>=64", "setuptools-scm>=8" ]
+
+[project]
+name = "array-we-there-yet"
+description = "Benchmarks for wide tables and fixed-size array layouts for high-dimensional profiles."
+readme = "README.md"
+authors = [
+  { name = "d33bs" },
+]
+requires-python = ">=3.11"
+classifiers = [
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+dynamic = [ "version" ]
+dependencies = [
+  "duckdb>=1.5.5",
+  "fire>=0.7",
+  "jinja2>=3.1.6",
+  "matplotlib>=3.11.2",
+  "numpy>=2.2.6",
+  "pandas>=2.2.3",
+  "pyarrow>=25.0.1",
+  "tabulate>=0.9",
+]
+scripts.array-we-there-yet = "array_we_there_yet.cli:trigger"
+
+[dependency-groups]
+dev = [
+  "coverage[toml]>=7.10.6",
+  "poethepoet>=0.34",
+  "pre-commit>=4.6.2",
+  "pytest>=8.3.5",
+  "pytest-cov>=6.2.1",
+]
+docs = [
+  "myst-nb>=1.2",
+  "pydata-sphinx-theme>=0.16.1",
+  "sphinx>=8.2.3",
+]
+notebooks = [
+  "black>=25.1",
+  "isort>=6.0.1",
+  "jupyterlab>=4.4.2",
+  "jupyterlab-code-formatter>=3.0.2",
+  "jupytext>=1.17.1",
+]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = [ "src" ]
+include = [ "array_we_there_yet*" ]
+
+[tool.setuptools_scm]
+root = "."
+version_scheme = "no-guess-dev"
+local_scheme = "no-local-version"
+version_file = "src/array_we_there_yet/_version.py"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+fix = true
+lint.select = [
+  # flake8-builtins
+  "A",
+  # flake8-annotations
+  "ANN",
+  # flake8-comprehensions
+  "C4",
+  # mccabe
+  "C90",
+  # pycodestyle
+  "E",
+  # pyflakes
+  "F",
+  # isort
+  "I",
+  # pylint
+  "PL",
+  # ruff
+  "RUF",
+  # flake8-simplify
+  "SIM",
+  "W",
+]
+# Ignore `F401` (unused imports) for `__init__.py` file
+lint.per-file-ignores."__init__.py" = [ "F401" ]
+lint.per-file-ignores."src/array_we_there_yet/benchmark.py" = [ "PLR0913" ]
+lint.per-file-ignores."src/array_we_there_yet/cli.py" = [ "PLR0913" ]
+lint.per-file-ignores."src/array_we_there_yet/main.py" = [ "PLR0913" ]
+
+[tool.pytest.ini_options]
+pythonpath = [ "." ]
+addopts = [
+  "--cov=array_we_there_yet",
+  "--cov-report=term-missing",
+  "--cov-report=xml",
+]
+
+[tool.coverage.run]
+branch = true
+source = [ "src/array_we_there_yet" ]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+
+[tool.poe.tasks]
+# tasks for development environments
+test.shell = """
+pytest
+"""
+lint.shell = """
+pre-commit run --all-files
+"""
+pipeline.shell = """
+pre-commit run --all-files && pytest
+"""
+jupyter.shell = """
+jupyter lab
+"""
+
+[tool.jupytext]
+formats = "ipynb,py:light"
+
+[tool.vulture]
+min_confidence = 90
+paths = [ "src/array_we_there_yet", "tests" ]

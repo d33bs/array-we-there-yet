@@ -1,0 +1,28 @@
+{
+  "config": {
+    "artifact_dir": "results/artifacts",
+    "dimensions": [
+      16,
+      64,
+      128
+    ],
+    "feature_projection_count": 8,
+    "figure_dir": "figures",
+    "measured_repetitions": 3,
+    "output_dir": "results",
+    "random_row_count": 128,
+    "rows": 2000,
+    "seed": 42,
+    "threads": 1,
+    "warmups": 1
+  },
+  "packages": {
+    "duckdb": "1.5.5",
+    "numpy": "2.2.6",
+    "pandas": "2.2.3",
+    "pyarrow": "25.0.1"
+  },
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "processor": "arm",
+  "python": "3.11.13"
+}
