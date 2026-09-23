@@ -6,6 +6,7 @@ import pandas as pd
 
 from array_we_there_yet.benchmark import (
     BenchmarkConfig,
+    layout_runners,
     run_benchmarks,
     summarize_results,
 )
@@ -44,3 +45,11 @@ def test_benchmark_runner_writes_results(tmp_path: Path) -> None:
         "write",
     }
     assert pd.api.types.is_float_dtype(raw["elapsed_seconds"])
+
+
+def test_layout_runners_compare_vortex_and_lance_without_arrow_ipc() -> None:
+    """The benchmark compares Vortex and Lance instead of Arrow IPC."""
+    backends = {runner.backend for runner in layout_runners()}
+
+    assert "arrow_ipc" not in backends
+    assert {"vortex", "lance"}.issubset(backends)

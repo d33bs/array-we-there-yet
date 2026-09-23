@@ -2,9 +2,12 @@
   "config": {
     "artifact_dir": "results/artifacts",
     "dimensions": [
-      16,
-      64,
-      128
+      256,
+      512,
+      1024,
+      2048,
+      4096,
+      8192
     ],
     "feature_projection_count": 8,
     "figure_dir": "figures",
@@ -18,11 +21,13 @@
   },
   "packages": {
     "duckdb": "1.5.5",
+    "lance": "12.0.0",
     "numpy": "2.2.6",
     "pandas": "2.2.3",
-    "pyarrow": "25.0.1"
+    "pyarrow": "25.0.1",
+    "vortex": "0.86.1"
   },
-  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "platform": "macOS-26.7-arm64-arm-64bit",
   "processor": "arm",
   "python": "3.11.13"
 }

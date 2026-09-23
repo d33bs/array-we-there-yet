@@ -9,13 +9,18 @@ from array_we_there_yet.benchmark import (
     run_benchmarks,
     summarize_results,
 )
-from array_we_there_yet.report import update_readme, write_figures
+from array_we_there_yet.report import (
+    update_readme,
+    write_figures,
+    write_parquet_performance_tables,
+    write_ratio_tables,
+)
 
 
 def run(
     *,
     rows: int = 2_000,
-    dimensions: str = "16,64,128",
+    dimensions: str = "256,512,1024,2048,4096,8192",
     measured_repetitions: int = 3,
     warmups: int = 1,
     seed: int = 42,
@@ -38,6 +43,8 @@ def run(
     )
     raw = run_benchmarks(config)
     summary = summarize_results(raw, config.output_dir)
+    ratio_tables = write_ratio_tables(summary, config.output_dir)
+    parquet_tables = write_parquet_performance_tables(summary, config.output_dir)
     figures = write_figures(summary, config.figure_dir)
     if update_readme_file:
         update_readme(
@@ -48,6 +55,8 @@ def run(
     return {
         "raw_results": str(config.output_dir / "raw_results.parquet"),
         "summary": str(config.output_dir / "summary.parquet"),
+        "ratio_summary": str(ratio_tables[0]),
+        "parquet_performance": str(parquet_tables[0]),
         "figures": str(config.figure_dir),
     }
 

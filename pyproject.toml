@@ -25,7 +25,9 @@ dependencies = [
   "numpy>=2.2.6",
   "pandas>=2.2.3",
   "pyarrow>=25.0.1",
+  "pylance>=12",
   "tabulate>=0.9",
+  "vortex-data>=0.86.1",
 ]
 scripts.array-we-there-yet = "array_we_there_yet.cli:trigger"
 

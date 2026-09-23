@@ -13,7 +13,7 @@ class ArrayWeThereYetCLI:
     def run(
         self,
         rows: int = 2_000,
-        dimensions: str = "16,64,128",
+        dimensions: str = "256,512,1024,2048,4096,8192",
         measured_repetitions: int = 3,
         warmups: int = 1,
         output_dir: str = "results",

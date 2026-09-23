@@ -13,11 +13,12 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 
 import duckdb
+import lance
 import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-from pyarrow import ipc
+import vortex as vx
 
 from array_we_there_yet.data import (
     BenchmarkDataset,
@@ -232,25 +233,47 @@ def layout_runners() -> list[LayoutRunner]:
             compute_norm=_compute_norm_from_matrix,
         ),
         LayoutRunner(
-            backend="arrow_ipc",
+            backend="vortex",
             layout="wide",
             compression="none",
-            write=_write_arrow_wide,
-            read_all=_read_arrow_all,
-            read_matrix=_read_arrow_wide_matrix,
-            read_rows=_read_arrow_wide_rows,
-            read_features=_read_arrow_wide_features,
+            write=_write_vortex_wide,
+            read_all=_read_vortex_all,
+            read_matrix=_read_vortex_wide_matrix,
+            read_rows=_read_vortex_wide_rows,
+            read_features=_read_vortex_wide_features,
             compute_norm=_compute_norm_from_matrix,
         ),
         LayoutRunner(
-            backend="arrow_ipc",
+            backend="vortex",
             layout="fixed_array",
             compression="none",
-            write=_write_arrow_fixed_array,
-            read_all=_read_arrow_all,
-            read_matrix=_read_arrow_fixed_matrix,
-            read_rows=_read_arrow_fixed_rows,
-            read_features=_read_arrow_fixed_features,
+            write=_write_vortex_fixed_array,
+            read_all=_read_vortex_all,
+            read_matrix=_read_vortex_fixed_matrix,
+            read_rows=_read_vortex_fixed_rows,
+            read_features=_read_vortex_fixed_features,
+            compute_norm=_compute_norm_from_matrix,
+        ),
+        LayoutRunner(
+            backend="lance",
+            layout="wide",
+            compression="lance_default",
+            write=_write_lance_wide,
+            read_all=_read_lance_all,
+            read_matrix=_read_lance_wide_matrix,
+            read_rows=_read_lance_wide_rows,
+            read_features=_read_lance_wide_features,
+            compute_norm=_compute_norm_from_matrix,
+        ),
+        LayoutRunner(
+            backend="lance",
+            layout="fixed_array",
+            compression="lance_default",
+            write=_write_lance_fixed_array,
+            read_all=_read_lance_all,
+            read_matrix=_read_lance_fixed_matrix,
+            read_rows=_read_lance_fixed_rows,
+            read_features=_read_lance_fixed_features,
             compute_norm=_compute_norm_from_matrix,
         ),
         LayoutRunner(
@@ -314,9 +337,11 @@ def write_environment(output_dir: Path, config: BenchmarkConfig) -> None:
         },
         "packages": {
             "duckdb": duckdb.__version__,
+            "lance": lance.__version__,
             "numpy": np.__version__,
             "pandas": pd.__version__,
             "pyarrow": pa.__version__,
+            "vortex": vx.__version__,
         },
     }
     (output_dir / "environment.json").write_text(
@@ -490,9 +515,10 @@ def _artifact_path(
     )
     suffix = {
         "csv": ".dir",
-        "arrow_ipc": ".arrow",
         "parquet": ".parquet",
         "duckdb": ".duckdb",
+        "vortex": ".vortex",
+        "lance": ".lance",
     }[runner.backend]
     return config.artifact_dir / f"{name}{suffix}"
 
@@ -650,71 +676,130 @@ def _arrow_fixed_table(dataset: BenchmarkDataset) -> pa.Table:
     return pa.Table.from_pydict(data)
 
 
-def _write_arrow_wide(dataset: BenchmarkDataset, path: Path) -> Artifact:
-    with ipc.new_file(path, _arrow_wide_table(dataset).schema) as writer:
-        writer.write_table(_arrow_wide_table(dataset))
+def _write_vortex_wide(dataset: BenchmarkDataset, path: Path) -> Artifact:
+    vx.io.write(_arrow_wide_table(dataset), str(path))
     return Artifact(path=path, bytes=_artifact_size(path))
 
 
-def _write_arrow_fixed_array(dataset: BenchmarkDataset, path: Path) -> Artifact:
-    table = _arrow_fixed_table(dataset)
-    with ipc.new_file(path, table.schema) as writer:
-        writer.write_table(table)
+def _write_vortex_fixed_array(dataset: BenchmarkDataset, path: Path) -> Artifact:
+    vx.io.write(_arrow_fixed_table(dataset), str(path))
     _write_sidecar_for_file(path, dataset.feature_names)
     return Artifact(path=path, bytes=_artifact_size(path) + _sidecar_size(path))
 
 
-def _read_arrow_all(artifact: Artifact, _: BenchmarkDataset) -> pa.Table:
-    with ipc.open_file(artifact.path) as reader:
-        return reader.read_all()
+def _read_vortex_all(artifact: Artifact, _: BenchmarkDataset) -> pa.Table:
+    return vx.open(str(artifact.path)).to_arrow().read_all()
 
 
-def _read_arrow_wide_matrix(
+def _read_vortex_wide_matrix(
     artifact: Artifact, dataset: BenchmarkDataset
 ) -> np.ndarray:
-    table = _read_arrow_all(artifact, dataset).select(dataset.feature_names)
+    table = _read_vortex_all(artifact, dataset).select(dataset.feature_names)
     return table.to_pandas().to_numpy(dtype=np.float32)
 
 
-def _read_arrow_fixed_matrix(
+def _read_vortex_fixed_matrix(
     artifact: Artifact, dataset: BenchmarkDataset
 ) -> np.ndarray:
-    table = _read_arrow_all(artifact, dataset).select(["features"])
+    table = _read_vortex_all(artifact, dataset).select(["features"])
     return _fixed_array_to_matrix(table["features"], dataset.dimensions)
 
 
-def _read_arrow_wide_rows(
+def _read_vortex_wide_rows(
     artifact: Artifact,
     dataset: BenchmarkDataset,
     rows: np.ndarray,
 ) -> np.ndarray:
-    return _read_arrow_wide_matrix(artifact, dataset)[rows, :]
+    return _read_vortex_wide_matrix(artifact, dataset)[rows, :]
 
 
-def _read_arrow_fixed_rows(
+def _read_vortex_fixed_rows(
     artifact: Artifact,
     dataset: BenchmarkDataset,
     rows: np.ndarray,
 ) -> np.ndarray:
-    return _read_arrow_fixed_matrix(artifact, dataset)[rows, :]
+    return _read_vortex_fixed_matrix(artifact, dataset)[rows, :]
 
 
-def _read_arrow_wide_features(
+def _read_vortex_wide_features(
     artifact: Artifact,
     dataset: BenchmarkDataset,
     features: np.ndarray,
 ) -> np.ndarray:
     names = [dataset.feature_names[index] for index in features]
-    table = _read_arrow_all(artifact, dataset).select(names)
+    table = _read_vortex_all(artifact, dataset).select(names)
     return table.to_pandas().to_numpy(dtype=np.float32)
 
 
-def _read_arrow_fixed_features(
+def _read_vortex_fixed_features(
     artifact: Artifact,
     dataset: BenchmarkDataset,
     features: np.ndarray,
 ) -> np.ndarray:
-    return _read_arrow_fixed_matrix(artifact, dataset)[:, features]
+    return _read_vortex_fixed_matrix(artifact, dataset)[:, features]
+
+
+def _write_lance_wide(dataset: BenchmarkDataset, path: Path) -> Artifact:
+    lance.write_dataset(_arrow_wide_table(dataset), path)
+    return Artifact(path=path, bytes=_artifact_size(path))
+
+
+def _write_lance_fixed_array(dataset: BenchmarkDataset, path: Path) -> Artifact:
+    lance.write_dataset(_arrow_fixed_table(dataset), path)
+    _write_sidecar_for_file(path, dataset.feature_names)
+    return Artifact(path=path, bytes=_artifact_size(path) + _sidecar_size(path))
+
+
+def _read_lance_all(artifact: Artifact, _: BenchmarkDataset) -> pa.Table:
+    return lance.dataset(artifact.path).to_table()
+
+
+def _read_lance_wide_matrix(
+    artifact: Artifact, dataset: BenchmarkDataset
+) -> np.ndarray:
+    table = lance.dataset(artifact.path).to_table(columns=dataset.feature_names)
+    return table.to_pandas().to_numpy(dtype=np.float32)
+
+
+def _read_lance_fixed_matrix(
+    artifact: Artifact, dataset: BenchmarkDataset
+) -> np.ndarray:
+    table = lance.dataset(artifact.path).to_table(columns=["features"])
+    return _fixed_array_to_matrix(table["features"], dataset.dimensions)
+
+
+def _read_lance_wide_rows(
+    artifact: Artifact,
+    dataset: BenchmarkDataset,
+    rows: np.ndarray,
+) -> np.ndarray:
+    return _read_lance_wide_matrix(artifact, dataset)[rows, :]
+
+
+def _read_lance_fixed_rows(
+    artifact: Artifact,
+    dataset: BenchmarkDataset,
+    rows: np.ndarray,
+) -> np.ndarray:
+    return _read_lance_fixed_matrix(artifact, dataset)[rows, :]
+
+
+def _read_lance_wide_features(
+    artifact: Artifact,
+    dataset: BenchmarkDataset,
+    features: np.ndarray,
+) -> np.ndarray:
+    names = [dataset.feature_names[index] for index in features]
+    table = lance.dataset(artifact.path).to_table(columns=names)
+    return table.to_pandas().to_numpy(dtype=np.float32)
+
+
+def _read_lance_fixed_features(
+    artifact: Artifact,
+    dataset: BenchmarkDataset,
+    features: np.ndarray,
+) -> np.ndarray:
+    return _read_lance_fixed_matrix(artifact, dataset)[:, features]
 
 
 def _write_parquet_wide(dataset: BenchmarkDataset, path: Path) -> Artifact:
