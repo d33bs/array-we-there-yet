@@ -1,0 +1,403 @@
+"""Tests for the summary, key findings, and setup sections of the README."""
+
+from pathlib import Path
+
+import pandas as pd
+import pytest
+
+from array_we_there_yet.report import (
+    RESULTS_END,
+    RESULTS_START,
+    SETUP_END,
+    SETUP_START,
+    _cpu_time_note,
+    array_vs_wide_markdown,
+    array_vs_wide_table,
+    encoding_findings,
+    environment_table,
+    render_setup_section,
+    summary_section,
+    update_readme,
+)
+
+OPERATIONS = [
+    "write",
+    "full_read",
+    "matrix_materialization",
+    "random_rows",
+    "feature_projection",
+    "mixed_retrieval",
+    "vector_norm",
+]
+# Array-like time divided by wide time, and array-like size divided by wide size.
+STORY = {
+    ("parquet", "fixed_array"): (
+        {
+            "write": 0.5,
+            "full_read": 0.3,
+            "matrix_materialization": 0.25,
+            "random_rows": 0.25,
+            "feature_projection": 0.95,
+            "mixed_retrieval": 0.9,
+            "vector_norm": 0.25,
+        },
+        0.7,
+    ),
+    ("lance", "fixed_array"): (
+        {
+            "write": 1.0,
+            "full_read": 0.01,
+            "matrix_materialization": 0.001,
+            "random_rows": 0.001,
+            "feature_projection": 0.1,
+            "mixed_retrieval": 0.1,
+            "vector_norm": 0.001,
+        },
+        0.9,
+    ),
+    ("csv", "delimited_array"): (
+        {
+            "write": 1.4,
+            "full_read": 0.8,
+            "matrix_materialization": 1.5,
+            "random_rows": 1.4,
+            "feature_projection": 5.0,
+            "mixed_retrieval": 3.0,
+            "vector_norm": 1.3,
+        },
+        1.1,
+    ),
+}
+
+
+def _story_summary() -> pd.DataFrame:
+    """Return a summary where every wide layout takes 1.0 seconds and 1,000 bytes."""
+    rows = []
+    for dimensions in [8, 16]:
+        for backend, layout, ratios, size in [
+            *(
+                (backend, layout, values[0], values[1])
+                for (backend, layout), values in STORY.items()
+            ),
+            *(
+                (backend, "wide", dict.fromkeys(OPERATIONS, 1.0), 1.0)
+                for backend, _ in STORY
+            ),
+        ]:
+            for operation in OPERATIONS:
+                seconds = ratios[operation]
+                rows.append(
+                    {
+                        "backend": backend,
+                        "layout": layout,
+                        "profile": "default",
+                        "rows": 10,
+                        "dimensions": dimensions,
+                        "operation": operation,
+                        "operation_parameter": (
+                            "8" if operation == "feature_projection" else "all"
+                        ),
+                        "median_seconds": seconds,
+                        "q25_seconds": seconds,
+                        "q75_seconds": seconds,
+                        "artifact_bytes": 1_000 * size,
+                        "repetitions": 3,
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+def test_array_vs_wide_table_divides_each_array_layout_by_its_own_wide_layout() -> None:
+    """Each row compares one array-like layout with the wide layout of its backend."""
+    table = array_vs_wide_table(_story_summary())
+
+    assert list(zip(table["backend"], table["layout"])) == [
+        ("csv", "delimited_array"),
+        ("parquet", "fixed_array"),
+        ("lance", "fixed_array"),
+    ]
+    largest_dimensions = 16
+    lance = table[table["backend"] == "lance"].iloc[0]
+    assert lance["dimensions"] == largest_dimensions
+    assert lance["matrix_materialization"] == pytest.approx(0.001)
+    assert lance["feature_projection"] == pytest.approx(0.1)
+    assert lance["storage_size"] == pytest.approx(0.9)
+
+
+def test_array_vs_wide_markdown_reads_in_percentages_and_multipliers() -> None:
+    """The table says how much faster or smaller, not raw ratios."""
+    markdown = array_vs_wide_markdown(array_vs_wide_table(_story_summary()))
+
+    assert (
+        "| Backend | Layout | Matrix materialization | Feature projection "
+        "| Write | Storage size |"
+    ) in markdown
+    assert (
+        "| Lance | `fixed_array` | 1,000x lower | 10x lower | 0% | -10% |" in markdown
+    )
+    assert "| Parquet | `fixed_array` | -75% | -5% | -50% | -30% |" in markdown
+    assert "| CSV | `delimited_array` | +50% | 5x higher | +40% | +10% |" in markdown
+
+
+def test_summary_section_leads_with_the_main_finding_as_a_quote() -> None:
+    """The first content of the summary is one quoted sentence with the finding."""
+    lines = summary_section(_story_summary())
+
+    assert lines[0] == "## Summary"
+    quote = next(line for line in lines if line.startswith("> "))
+    assert quote == (
+        "> **Main finding.** Array-like layouts read whole feature matrices 4x to "
+        "1,000x faster than wide layouts in 2 of 3 backends. Reading only 8 "
+        "features gives mixed results: array-like layouts are faster in Lance "
+        "(10x), about the same in Parquet, and slower in CSV (5x)."
+    )
+    quote_position = 2
+    assert lines.index(quote) == quote_position
+
+
+def test_summary_section_backs_the_finding_with_concrete_bullets() -> None:
+    """Each bullet names backends and numbers from the data."""
+    text = "\n".join(summary_section(_story_summary()))
+
+    assert (
+        "- **Whole-matrix reads.** Matrix materialization is faster with the "
+        "array-like layout in Lance (1,000x) and Parquet (4x). It is slower in "
+        "CSV (1.5x)."
+    ) in text
+    assert (
+        "- **Selecting a few features.** Reading 8 features is faster in Lance "
+        "(10x). It is about the same in Parquet. It is slower in CSV "
+        "(5x)."
+    ) in text
+    assert (
+        "- **Text packing.** CSV packed arrays are slower than CSV wide for write, "
+        "matrix materialization, random rows, feature projection, mixed retrieval, "
+        "and vector norm, and faster only for full read. They are 10% larger."
+    ) in text
+    assert "single machine" in text
+    assert "See Limitations." in text
+
+
+def test_summary_section_skips_bullets_it_has_no_data_for() -> None:
+    """A summary without CSV rows has no text-packing bullet."""
+    summary = _story_summary()
+    summary = summary[summary["backend"] != "csv"]
+
+    text = "\n".join(summary_section(summary))
+
+    assert "Text packing" not in text
+    assert "> **Main finding.**" in text
+
+
+def _compact_summary() -> pd.DataFrame:
+    """Return Parquet results where the compact profile narrows the storage gap."""
+    rows = []
+    for profile, wide_bytes, array_bytes in [
+        ("default", 1_000, 700),
+        ("compact", 800, 680),
+    ]:
+        for layout, size in [("wide", wide_bytes), ("fixed_array", array_bytes)]:
+            for operation in ["write", "matrix_materialization"]:
+                rows.append(
+                    {
+                        "backend": "parquet",
+                        "layout": layout,
+                        "profile": profile,
+                        "rows": 10,
+                        "dimensions": 16,
+                        "operation": operation,
+                        "operation_parameter": "all",
+                        "median_seconds": 1.0,
+                        "q25_seconds": 1.0,
+                        "q75_seconds": 1.0,
+                        "artifact_bytes": size,
+                        "repetitions": 3,
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+def test_summary_section_reports_the_encoding_effect_on_storage() -> None:
+    """The encoding bullet shows the storage gap under both profiles."""
+    text = "\n".join(summary_section(_compact_summary()))
+
+    assert (
+        "- **Encoding settings matter.** Parquet's array layout is 30% smaller "
+        "than its wide layout by default and 15% smaller with the compact "
+        "profile. Default dictionary encoding inflates the wide layout."
+    ) in text
+
+
+def test_encoding_findings_states_the_dictionary_and_duckdb_sizes() -> None:
+    """The encodings text quotes bytes per value for Parquet wide and DuckDB wide."""
+    summary = _compact_summary()
+    duckdb = summary[
+        (summary["layout"] == "wide") & (summary["profile"] == "default")
+    ].assign(backend="duckdb", artifact_bytes=1_650)
+    summary = pd.concat([summary, duckdb], ignore_index=True)
+
+    text = encoding_findings(summary)
+
+    assert text is not None
+    assert "Parquet turns on dictionary encoding by default." in text
+    assert (
+        "Parquet wide takes 6.25 bytes per value by default and 5.00 with the" in text
+    )
+    assert "DuckDB wide takes 10.31 bytes per value, about 2.6x the raw size" in text
+    assert "did not investigate" in text
+
+
+def test_encoding_findings_is_absent_without_parquet_compact_rows() -> None:
+    """Without a Parquet compact profile there is nothing to quote."""
+    assert encoding_findings(_story_summary()) is None
+
+
+def _environment() -> dict:
+    """Return environment metadata shaped like `environment.json`."""
+    return {
+        "python": "3.11.13",
+        "platform": "macOS-26.7-arm64-arm-64bit",
+        "git_commit": "abc1234-dirty",
+        "hardware": {
+            "cpu_model": "Test CPU",
+            "logical_cores": 12,
+            "memory_bytes": 34_359_738_368,
+        },
+        "packages": {"pyarrow": "25.0.1", "tiledb": [0, 36, 1]},
+        "thread_limits": {
+            "arrow_cpu_threads": 1,
+            "arrow_io_threads": 1,
+            "duckdb_threads": 1,
+            "lance": "library default",
+            "vortex": "library default",
+        },
+    }
+
+
+def test_environment_table_puts_the_thread_limits_in_one_row() -> None:
+    """The table has one thread-limit row instead of one row per library."""
+    table = environment_table(_environment())
+
+    assert "| CPU | Test CPU (12 logical cores) |" in table
+    assert "| Memory | 32 GiB |" in table
+    assert "| Code version | `abc1234-dirty` |" in table
+    assert "| `tiledb` | 0.36.1 |" in table
+    assert table.count("Thread limit") == 0
+    assert (
+        "| Threads | Arrow CPU 1, Arrow I/O 1, DuckDB 1; "
+        "Lance and Vortex use their library defaults |"
+    ) in table
+
+
+def test_setup_section_holds_the_environment_and_the_backends() -> None:
+    """Setup facts live in their own section, apart from the results."""
+    lines = render_setup_section(_story_summary(), _environment())
+
+    headings = [line for line in lines if line.startswith("#")]
+    assert headings == ["## Environment", "## Backends and access paths"]
+    text = "\n".join(lines)
+    assert "| CSV | `pandas` CSV I/O |" in text
+    assert "not only the storage layout" in text
+
+
+def test_setup_section_omits_the_environment_when_unknown() -> None:
+    """Without metadata, only the backends table remains."""
+    lines = render_setup_section(_story_summary(), None)
+
+    headings = [line for line in lines if line.startswith("#")]
+    assert headings == ["## Backends and access paths"]
+
+
+def test_update_readme_replaces_the_results_and_setup_blocks(tmp_path: Path) -> None:
+    """Both generated blocks are replaced and the text around them is kept."""
+    readme = tmp_path / "README.md"
+    readme.write_text(
+        "# Title\n\nIntro.\n\n"
+        f"{RESULTS_START}\n\nold results\n\n{RESULTS_END}\n\n"
+        "## Methodology\n\nStatic text.\n\n"
+        f"{SETUP_START}\n\nold setup\n\n{SETUP_END}\n\n"
+        "## Limitations\n",
+        encoding="utf-8",
+    )
+
+    update_readme(
+        readme_path=readme,
+        summary=_story_summary(),
+        figure_paths=[],
+        environment=_environment(),
+    )
+
+    text = readme.read_text(encoding="utf-8")
+    assert "old results" not in text
+    assert "old setup" not in text
+    assert text.index("## Summary") < text.index("## Methodology")
+    assert text.index("## Methodology") < text.index("## Environment")
+    assert text.index("## Environment") < text.index("## Limitations")
+    assert "Static text." in text
+    assert text.startswith("# Title\n\nIntro.")
+
+
+def test_update_readme_leaves_a_readme_without_setup_markers_alone(
+    tmp_path: Path,
+) -> None:
+    """A README with no setup markers gets no setup section appended."""
+    readme = tmp_path / "README.md"
+    readme.write_text(
+        f"# Title\n\n{RESULTS_START}\n\nold\n\n{RESULTS_END}\n", encoding="utf-8"
+    )
+
+    update_readme(
+        readme_path=readme,
+        summary=_story_summary(),
+        figure_paths=[],
+        environment=_environment(),
+    )
+
+    text = readme.read_text(encoding="utf-8")
+    assert "## Summary" in text
+    assert "## Environment" not in text
+
+
+def _cpu_summary() -> pd.DataFrame:
+    """Return Vortex results where the array layout uses three threads."""
+    rows = []
+    for layout, wall, cpu in [("wide", 4.0, 4.0), ("fixed_array", 1.0, 3.0)]:
+        rows.append(
+            {
+                "backend": "vortex",
+                "layout": layout,
+                "profile": "default",
+                "rows": 10,
+                "dimensions": 16,
+                "operation": "matrix_materialization",
+                "operation_parameter": "all",
+                "median_seconds": wall,
+                "median_cpu_seconds": cpu,
+                "median_parallelism": cpu / wall,
+                "artifact_bytes": 1_000,
+                "repetitions": 3,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def test_cpu_time_note_compares_layouts_in_cpu_time_for_multithreaded_backends() -> (
+    None
+):
+    """CPU time counts every thread, so it gives a thread-fair comparison."""
+    note = _cpu_time_note(_cpu_summary())
+
+    assert note == (
+        "Measured in CPU time, which counts every thread, matrix materialization "
+        "with the array-like layout is 1.3x faster in Vortex (4x faster in wall "
+        "time)."
+    )
+
+
+def test_cpu_time_note_is_absent_without_cpu_columns_or_multithreading() -> None:
+    """Single-threaded runs and older results need no CPU-time note."""
+    summary = _cpu_summary()
+
+    assert _cpu_time_note(summary.drop(columns="median_cpu_seconds")) is None
+    single = summary.assign(median_parallelism=1.0)
+    assert _cpu_time_note(single) is None

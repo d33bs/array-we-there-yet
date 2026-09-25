@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+
+import pandas as pd
 
 from array_we_there_yet.benchmark import (
     BenchmarkConfig,
@@ -12,7 +15,7 @@ from array_we_there_yet.benchmark import (
 from array_we_there_yet.report import (
     update_readme,
     write_figures,
-    write_parquet_performance_tables,
+    write_profile_tables,
     write_ratio_tables,
 )
 
@@ -44,19 +47,21 @@ def run(
     raw = run_benchmarks(config)
     summary = summarize_results(raw, config.output_dir)
     ratio_tables = write_ratio_tables(summary, config.output_dir)
-    parquet_tables = write_parquet_performance_tables(summary, config.output_dir)
+    write_profile_tables(summary, config.output_dir)
     figures = write_figures(summary, config.figure_dir)
     if update_readme_file:
+        environment_path = config.output_dir / "environment.json"
         update_readme(
             readme_path=Path("README.md"),
             summary=summary,
             figure_paths=figures,
+            environment=json.loads(environment_path.read_text(encoding="utf-8")),
+            encodings=pd.read_parquet(config.output_dir / "encodings.parquet"),
         )
     return {
         "raw_results": str(config.output_dir / "raw_results.parquet"),
         "summary": str(config.output_dir / "summary.parquet"),
         "ratio_summary": str(ratio_tables[0]),
-        "parquet_performance": str(parquet_tables[0]),
         "figures": str(config.figure_dir),
     }
 

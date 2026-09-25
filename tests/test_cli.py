@@ -49,4 +49,4 @@ def test_run_cli_smoke(tmp_path: Path) -> None:
         check=True,
     )
     assert "raw_results" in output.stdout
-    assert "parquet_performance" in output.stdout
+    assert "parquet_performance" not in output.stdout

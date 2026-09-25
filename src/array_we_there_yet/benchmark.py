@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import contextlib
+import dataclasses
+import functools
 import json
 import os
 import platform
 import shutil
 import subprocess
 import time
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Literal
@@ -17,8 +21,12 @@ import lance
 import numpy as np
 import pandas as pd
 import pyarrow as pa
+import pyarrow.dataset as pads
 import pyarrow.parquet as pq
+import tiledb
 import vortex as vx
+import zarr
+from numcodecs import Blosc, blosc
 
 from array_we_there_yet.data import (
     BenchmarkDataset,
@@ -26,8 +34,10 @@ from array_we_there_yet.data import (
     make_synthetic_dataset,
     wide_dataframe,
 )
+from array_we_there_yet.encodings import describe_encoding
 from array_we_there_yet.validation import (
     assert_features,
+    assert_mixed_retrieval,
     assert_rows,
     assert_same_matrix,
 )
@@ -38,7 +48,10 @@ Layout = Literal[
     "delimited_array",
     "json_array",
     "duckdb_array",
+    "zarr_matrix",
+    "tiledb_dense",
 ]
+METADATA_COLUMNS = ("sample_id", "plate_id", "well_id")
 
 
 @dataclass(frozen=True)
@@ -72,10 +85,12 @@ class BenchmarkResult:
     operation_parameter: str
     iteration: int
     elapsed_seconds: float
+    cpu_seconds: float
     artifact_bytes: int
     peak_memory_bytes: int | None
     threads: int
     compression: str
+    profile: str
     timestamp: str
     git_commit: str
     rows_per_second: float | None = None
@@ -103,16 +118,77 @@ class LayoutRunner:
     read_rows: Callable[[Artifact, BenchmarkDataset, np.ndarray], np.ndarray]
     read_features: Callable[[Artifact, BenchmarkDataset, np.ndarray], np.ndarray]
     compute_norm: Callable[[Artifact, BenchmarkDataset], np.ndarray]
+    profile: str = "default"
+
+
+BYTES_PER_TEXT_VALUE = 12
+DISK_HEADROOM = 1.5
+
+
+def required_disk_bytes(config: BenchmarkConfig) -> int:
+    """Estimate the disk space that one layout needs at the widest feature count.
+
+    The largest artifacts are CSV text at about 12 bytes per value. The benchmark
+    keeps every write of one layout until it finishes measuring it.
+    """
+    writes = config.warmups + config.measured_repetitions
+    values = config.rows * max(config.dimensions)
+    return int(values * BYTES_PER_TEXT_VALUE * writes * DISK_HEADROOM)
+
+
+def _check_disk_space(config: BenchmarkConfig) -> None:
+    """Stop early when the disk cannot hold the artifacts of one layout."""
+    required = required_disk_bytes(config)
+    free = shutil.disk_usage(config.artifact_dir).free
+    if free < required:
+        message = (
+            f"The benchmark needs about {required / 1e9:.1f} GB of free disk space "
+            f"but only {free / 1e9:.1f} GB is free in {config.artifact_dir}. "
+            "Free some space or use fewer rows or feature counts."
+        )
+        raise RuntimeError(message)
+
+
+def _remove_artifacts(
+    config: BenchmarkConfig,
+    runner: LayoutRunner,
+    dataset: BenchmarkDataset,
+) -> None:
+    """Delete every artifact that one layout wrote for one feature count."""
+    for iteration in range(config.warmups + config.measured_repetitions):
+        path = _artifact_path(config, runner, dataset, iteration)
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink(missing_ok=True)
+        _sidecar_path(path).unlink(missing_ok=True)
+
+
+def _write_raw_results(
+    config: BenchmarkConfig,
+    records: list[BenchmarkResult],
+    encodings: list[dict[str, object]],
+) -> pd.DataFrame:
+    """Write the results so far, so that a crash keeps finished feature counts."""
+    raw = pd.DataFrame(asdict(record) for record in records)
+    raw.to_parquet(config.output_dir / "raw_results.parquet", index=False)
+    pd.DataFrame(encodings).to_parquet(
+        config.output_dir / "encodings.parquet", index=False
+    )
+    return raw
 
 
 def run_benchmarks(config: BenchmarkConfig) -> pd.DataFrame:
     """Run the configured benchmark and write raw outputs."""
     config.output_dir.mkdir(parents=True, exist_ok=True)
+    thread_limits = apply_thread_limits(config.threads)
     if config.artifact_dir.exists():
         shutil.rmtree(config.artifact_dir)
     config.artifact_dir.mkdir(parents=True, exist_ok=True)
+    _check_disk_space(config)
 
     records: list[BenchmarkResult] = []
+    encodings: list[dict[str, object]] = []
     timestamp = pd.Timestamp.utcnow().isoformat()
     git_commit = _git_commit()
 
@@ -143,6 +219,17 @@ def run_benchmarks(config: BenchmarkConfig) -> pd.DataFrame:
                 git_commit=git_commit,
                 records=records,
             )
+            encodings.append(
+                {
+                    "backend": runner.backend,
+                    "layout": runner.layout,
+                    "profile": runner.profile,
+                    "dimensions": dataset.dimensions,
+                    "encoding": describe_encoding(
+                        runner.backend, runner.layout, artifact.path
+                    ),
+                }
+            )
             _measure_reads(
                 config=config,
                 runner=runner,
@@ -154,12 +241,12 @@ def run_benchmarks(config: BenchmarkConfig) -> pd.DataFrame:
                 git_commit=git_commit,
                 records=records,
             )
+            _remove_artifacts(config, runner, dataset)
 
-    raw = pd.DataFrame(asdict(record) for record in records)
-    raw_path = config.output_dir / "raw_results.parquet"
-    raw.to_parquet(raw_path, index=False)
-    raw.to_csv(config.output_dir / "raw_results.csv", index=False)
-    write_environment(config.output_dir, config)
+        _write_raw_results(config, records, encodings)
+
+    raw = _write_raw_results(config, records, encodings)
+    write_environment(config.output_dir, config, thread_limits)
     return raw
 
 
@@ -178,13 +265,17 @@ def summarize_results(
         "operation_parameter",
         "threads",
         "compression",
+        "profile",
     ]
+    raw = raw.assign(parallelism=raw["cpu_seconds"] / raw["elapsed_seconds"])
     summary = (
         raw.groupby(group_columns, dropna=False)
         .agg(
             median_seconds=("elapsed_seconds", "median"),
             q25_seconds=("elapsed_seconds", lambda values: values.quantile(0.25)),
             q75_seconds=("elapsed_seconds", lambda values: values.quantile(0.75)),
+            median_cpu_seconds=("cpu_seconds", "median"),
+            median_parallelism=("parallelism", "median"),
             artifact_bytes=("artifact_bytes", "max"),
             repetitions=("iteration", "count"),
         )
@@ -192,12 +283,61 @@ def summarize_results(
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     summary.to_parquet(output_dir / "summary.parquet", index=False)
-    summary.to_csv(output_dir / "summary.csv", index=False)
     return summary
 
 
 def layout_runners() -> list[LayoutRunner]:
-    """Return the backend and layout runners available in this environment."""
+    """Return the default runners and the compact runners for formats with a knob."""
+    defaults = _default_runners()
+    return [*defaults, *_compact_runners(defaults)]
+
+
+def _compact_runners(defaults: list[LayoutRunner]) -> list[LayoutRunner]:
+    """Return runners that write the same layouts with smaller-file settings.
+
+    DuckDB, Lance, and Vortex are left out. Their writers expose no setting that
+    the benchmark could verify to change the stored size.
+    """
+    writers = {
+        ("csv", "wide"): (functools.partial(_write_csv_wide, compress=True), "gzip"),
+        ("parquet", "wide"): (
+            functools.partial(_write_parquet_wide, profile="compact"),
+            "zstd",
+        ),
+        ("parquet", "fixed_array"): (
+            functools.partial(_write_parquet_fixed_array, profile="compact"),
+            "zstd",
+        ),
+        ("zarr", "wide"): (
+            functools.partial(_write_zarr_wide, compact=True),
+            "blosc_zstd",
+        ),
+        ("zarr", "zarr_matrix"): (
+            functools.partial(_write_zarr_matrix, compact=True),
+            "blosc_zstd",
+        ),
+        ("tiledb", "wide"): (
+            functools.partial(_write_tiledb_wide, compact=True),
+            "shuffle_zstd",
+        ),
+        ("tiledb", "tiledb_dense"): (
+            functools.partial(_write_tiledb_dense, compact=True),
+            "shuffle_zstd",
+        ),
+    }
+    return [
+        dataclasses.replace(
+            runner,
+            write=writers[(runner.backend, runner.layout)][0],
+            compression=writers[(runner.backend, runner.layout)][1],
+            profile="compact",
+        )
+        for runner in defaults
+        if (runner.backend, runner.layout) in writers
+    ]
+
+
+def _default_runners() -> list[LayoutRunner]:
     return [
         LayoutRunner(
             backend="csv",
@@ -230,50 +370,6 @@ def layout_runners() -> list[LayoutRunner]:
             read_matrix=_read_csv_json_matrix,
             read_rows=_read_csv_json_rows,
             read_features=_read_csv_json_features,
-            compute_norm=_compute_norm_from_matrix,
-        ),
-        LayoutRunner(
-            backend="vortex",
-            layout="wide",
-            compression="none",
-            write=_write_vortex_wide,
-            read_all=_read_vortex_all,
-            read_matrix=_read_vortex_wide_matrix,
-            read_rows=_read_vortex_wide_rows,
-            read_features=_read_vortex_wide_features,
-            compute_norm=_compute_norm_from_matrix,
-        ),
-        LayoutRunner(
-            backend="vortex",
-            layout="fixed_array",
-            compression="none",
-            write=_write_vortex_fixed_array,
-            read_all=_read_vortex_all,
-            read_matrix=_read_vortex_fixed_matrix,
-            read_rows=_read_vortex_fixed_rows,
-            read_features=_read_vortex_fixed_features,
-            compute_norm=_compute_norm_from_matrix,
-        ),
-        LayoutRunner(
-            backend="lance",
-            layout="wide",
-            compression="lance_default",
-            write=_write_lance_wide,
-            read_all=_read_lance_all,
-            read_matrix=_read_lance_wide_matrix,
-            read_rows=_read_lance_wide_rows,
-            read_features=_read_lance_wide_features,
-            compute_norm=_compute_norm_from_matrix,
-        ),
-        LayoutRunner(
-            backend="lance",
-            layout="fixed_array",
-            compression="lance_default",
-            write=_write_lance_fixed_array,
-            read_all=_read_lance_all,
-            read_matrix=_read_lance_fixed_matrix,
-            read_rows=_read_lance_fixed_rows,
-            read_features=_read_lance_fixed_features,
             compute_norm=_compute_norm_from_matrix,
         ),
         LayoutRunner(
@@ -320,15 +416,110 @@ def layout_runners() -> list[LayoutRunner]:
             read_features=_read_duckdb_array_features,
             compute_norm=_compute_norm_from_matrix,
         ),
+        LayoutRunner(
+            backend="zarr",
+            layout="wide",
+            compression="zarr_default",
+            write=_write_zarr_wide,
+            read_all=_read_zarr_wide_all,
+            read_matrix=_read_zarr_wide_matrix,
+            read_rows=_read_zarr_wide_rows,
+            read_features=_read_zarr_wide_features,
+            compute_norm=_compute_norm_from_matrix,
+        ),
+        LayoutRunner(
+            backend="zarr",
+            layout="zarr_matrix",
+            compression="zarr_default",
+            write=_write_zarr_matrix,
+            read_all=_read_zarr_matrix_all,
+            read_matrix=_read_zarr_matrix,
+            read_rows=_read_zarr_matrix_rows,
+            read_features=_read_zarr_matrix_features,
+            compute_norm=_compute_norm_from_matrix,
+        ),
+        LayoutRunner(
+            backend="tiledb",
+            layout="wide",
+            compression="tiledb_default",
+            write=_write_tiledb_wide,
+            read_all=_read_tiledb_wide_all,
+            read_matrix=_read_tiledb_wide_matrix,
+            read_rows=_read_tiledb_wide_rows,
+            read_features=_read_tiledb_wide_features,
+            compute_norm=_compute_norm_from_matrix,
+        ),
+        LayoutRunner(
+            backend="tiledb",
+            layout="tiledb_dense",
+            compression="tiledb_default",
+            write=_write_tiledb_dense,
+            read_all=_read_tiledb_dense_all,
+            read_matrix=_read_tiledb_dense_matrix,
+            read_rows=_read_tiledb_dense_rows,
+            read_features=_read_tiledb_dense_features,
+            compute_norm=_compute_norm_from_matrix,
+        ),
+        LayoutRunner(
+            backend="vortex",
+            layout="wide",
+            compression="none",
+            write=_write_vortex_wide,
+            read_all=_read_vortex_all,
+            read_matrix=_read_vortex_wide_matrix,
+            read_rows=_read_vortex_wide_rows,
+            read_features=_read_vortex_wide_features,
+            compute_norm=_compute_norm_from_matrix,
+        ),
+        LayoutRunner(
+            backend="vortex",
+            layout="fixed_array",
+            compression="none",
+            write=_write_vortex_fixed_array,
+            read_all=_read_vortex_all,
+            read_matrix=_read_vortex_fixed_matrix,
+            read_rows=_read_vortex_fixed_rows,
+            read_features=_read_vortex_fixed_features,
+            compute_norm=_compute_norm_from_matrix,
+        ),
+        LayoutRunner(
+            backend="lance",
+            layout="wide",
+            compression="lance_default",
+            write=_write_lance_wide,
+            read_all=_read_lance_all,
+            read_matrix=_read_lance_wide_matrix,
+            read_rows=_read_lance_wide_rows,
+            read_features=_read_lance_wide_features,
+            compute_norm=_compute_norm_from_matrix,
+        ),
+        LayoutRunner(
+            backend="lance",
+            layout="fixed_array",
+            compression="lance_default",
+            write=_write_lance_fixed_array,
+            read_all=_read_lance_all,
+            read_matrix=_read_lance_fixed_matrix,
+            read_rows=_read_lance_fixed_rows,
+            read_features=_read_lance_fixed_features,
+            compute_norm=_compute_norm_from_matrix,
+        ),
     ]
 
 
-def write_environment(output_dir: Path, config: BenchmarkConfig) -> None:
+def write_environment(
+    output_dir: Path,
+    config: BenchmarkConfig,
+    thread_limits: dict[str, int | str] | None = None,
+) -> None:
     """Write environment metadata beside the benchmark outputs."""
     metadata = {
         "python": platform.python_version(),
         "platform": platform.platform(),
+        "git_commit": _git_commit(),
         "processor": platform.processor(),
+        "hardware": hardware_info(),
+        "thread_limits": thread_limits or {},
         "config": {
             **asdict(config),
             "output_dir": str(config.output_dir),
@@ -341,7 +532,9 @@ def write_environment(output_dir: Path, config: BenchmarkConfig) -> None:
             "numpy": np.__version__,
             "pandas": pd.__version__,
             "pyarrow": pa.__version__,
+            "tiledb": tiledb.version(),
             "vortex": vx.__version__,
+            "zarr": zarr.__version__,
         },
     }
     (output_dir / "environment.json").write_text(
@@ -364,9 +557,9 @@ def _measure_writes(
     for iteration in range(total_writes):
         artifact_path = _artifact_path(config, runner, dataset, iteration)
         _prepare_artifact_path(artifact_path)
-        started = time.perf_counter()
-        artifact = runner.write(dataset, artifact_path)
-        elapsed = time.perf_counter() - started
+        artifact, elapsed, cpu = _timed(
+            lambda path=artifact_path: runner.write(dataset, path)
+        )
         _validate_artifact(runner, artifact, dataset)
         if iteration >= config.warmups:
             records.append(
@@ -378,6 +571,7 @@ def _measure_writes(
                     operation_parameter="all",
                     iteration=iteration - config.warmups,
                     elapsed=elapsed,
+                    cpu=cpu,
                     artifact=artifact,
                     timestamp=timestamp,
                     git_commit=git_commit,
@@ -426,6 +620,23 @@ def _measure_reads(
             lambda matrix: assert_features(matrix, dataset.matrix, selected_features),
         ),
         (
+            "mixed_retrieval",
+            f"{len(selected_rows)}_rows_{len(selected_features)}_features",
+            lambda: _read_mixed(
+                runner,
+                artifact,
+                dataset,
+                selected_rows,
+                selected_features,
+            ),
+            lambda frame: assert_mixed_retrieval(
+                frame,
+                dataset=dataset,
+                rows=selected_rows,
+                features=selected_features,
+            ),
+        ),
+        (
             "vector_norm",
             "l2",
             lambda: runner.compute_norm(artifact, dataset),
@@ -441,9 +652,7 @@ def _measure_reads(
         for _ in range(config.warmups):
             validate(call())
         for iteration in range(config.measured_repetitions):
-            started = time.perf_counter()
-            value = call()
-            elapsed = time.perf_counter() - started
+            value, elapsed, cpu = _timed(call)
             validate(value)
             records.append(
                 _result(
@@ -454,6 +663,7 @@ def _measure_reads(
                     operation_parameter=parameter,
                     iteration=iteration,
                     elapsed=elapsed,
+                    cpu=cpu,
                     artifact=artifact,
                     timestamp=timestamp,
                     git_commit=git_commit,
@@ -470,6 +680,7 @@ def _result(
     operation_parameter: str,
     iteration: int,
     elapsed: float,
+    cpu: float,
     artifact: Artifact,
     timestamp: str,
     git_commit: str,
@@ -487,10 +698,12 @@ def _result(
         operation_parameter=operation_parameter,
         iteration=iteration,
         elapsed_seconds=elapsed,
+        cpu_seconds=cpu,
         artifact_bytes=artifact.bytes,
         peak_memory_bytes=None,
         threads=config.threads,
         compression=runner.compression,
+        profile=runner.profile,
         timestamp=timestamp,
         git_commit=git_commit,
         rows_per_second=rows_per_second,
@@ -511,7 +724,7 @@ def _artifact_path(
 ) -> Path:
     name = (
         f"{dataset.name}_rows-{dataset.rows}_dims-{dataset.dimensions}_"
-        f"{runner.backend}_{runner.layout}_iter-{iteration}"
+        f"{runner.backend}_{runner.layout}{_profile_suffix(runner)}_iter-{iteration}"
     )
     suffix = {
         "csv": ".dir",
@@ -519,8 +732,14 @@ def _artifact_path(
         "duckdb": ".duckdb",
         "vortex": ".vortex",
         "lance": ".lance",
+        "zarr": ".zarr",
+        "tiledb": ".tiledb",
     }[runner.backend]
     return config.artifact_dir / f"{name}{suffix}"
+
+
+def _profile_suffix(runner: LayoutRunner) -> str:
+    return "" if runner.profile == "default" else f"_{runner.profile}"
 
 
 def _prepare_artifact_path(path: Path) -> None:
@@ -546,12 +765,19 @@ def _write_feature_names(directory: Path, feature_names: list[str]) -> None:
 
 
 def _csv_path(artifact: Artifact) -> Path:
-    return artifact.path / "data.csv"
+    compressed = artifact.path / "data.csv.gz"
+    return compressed if compressed.exists() else artifact.path / "data.csv"
 
 
-def _write_csv_wide(dataset: BenchmarkDataset, path: Path) -> Artifact:
+def _write_csv_wide(
+    dataset: BenchmarkDataset,
+    path: Path,
+    *,
+    compress: bool = False,
+) -> Artifact:
     path.mkdir(parents=True, exist_ok=True)
-    wide_dataframe(dataset).to_csv(path / "data.csv", index=False)
+    file_name = "data.csv.gz" if compress else "data.csv"
+    wide_dataframe(dataset).to_csv(path / file_name, index=False)
     return Artifact(path=path, bytes=_artifact_size(path))
 
 
@@ -568,8 +794,7 @@ def _write_csv_json_array(dataset: BenchmarkDataset, path: Path) -> Artifact:
     path.mkdir(parents=True, exist_ok=True)
     result = dataset.metadata.copy()
     result["features"] = [
-        json.dumps([float(value) for value in row], separators=(",", ":"))
-        for row in dataset.matrix
+        "[" + ",".join(np.char.mod("%.9g", row)) + "]" for row in dataset.matrix
     ]
     result.to_csv(path / "data.csv", index=False)
     _write_feature_names(path, dataset.feature_names)
@@ -642,6 +867,17 @@ def _read_csv_wide_features(
     return table.to_numpy(dtype=np.float32)
 
 
+def _read_csv_wide_mixed(
+    artifact: Artifact,
+    dataset: BenchmarkDataset,
+    rows: np.ndarray,
+    features: np.ndarray,
+) -> pd.DataFrame:
+    names = _mixed_columns(dataset, features)
+    table = pd.read_csv(_csv_path(artifact), usecols=pd.Index(names))
+    return table.loc[:, names].iloc[rows].reset_index(drop=True)
+
+
 def _read_csv_delimited_features(
     artifact: Artifact,
     dataset: BenchmarkDataset,
@@ -650,12 +886,56 @@ def _read_csv_delimited_features(
     return _read_csv_delimited_matrix(artifact, dataset)[:, features]
 
 
+def _read_csv_delimited_mixed(
+    artifact: Artifact,
+    dataset: BenchmarkDataset,
+    rows: np.ndarray,
+    features: np.ndarray,
+) -> pd.DataFrame:
+    table = pd.read_csv(
+        _csv_path(artifact),
+        usecols=pd.Index([*METADATA_COLUMNS, "features"]),
+    ).iloc[rows]
+    values = [
+        np.fromstring(item, sep=";", dtype=np.float32)[features]
+        for item in table["features"]
+    ]
+    return _mixed_frame(
+        metadata=table[list(METADATA_COLUMNS)],
+        matrix=np.vstack(values).astype(np.float32, copy=False),
+        dataset=dataset,
+        features=features,
+    )
+
+
 def _read_csv_json_features(
     artifact: Artifact,
     dataset: BenchmarkDataset,
     features: np.ndarray,
 ) -> np.ndarray:
     return _read_csv_json_matrix(artifact, dataset)[:, features]
+
+
+def _read_csv_json_mixed(
+    artifact: Artifact,
+    dataset: BenchmarkDataset,
+    rows: np.ndarray,
+    features: np.ndarray,
+) -> pd.DataFrame:
+    table = pd.read_csv(
+        _csv_path(artifact),
+        usecols=pd.Index([*METADATA_COLUMNS, "features"]),
+    ).iloc[rows]
+    matrix = np.asarray(
+        [[json.loads(item)[index] for index in features] for item in table["features"]],
+        dtype=np.float32,
+    )
+    return _mixed_frame(
+        metadata=table[list(METADATA_COLUMNS)],
+        matrix=matrix,
+        dataset=dataset,
+        features=features,
+    )
 
 
 def _arrow_wide_table(dataset: BenchmarkDataset) -> pa.Table:
@@ -687,6 +967,18 @@ def _write_vortex_fixed_array(dataset: BenchmarkDataset, path: Path) -> Artifact
     return Artifact(path=path, bytes=_artifact_size(path) + _sidecar_size(path))
 
 
+def _vortex_take(
+    artifact: Artifact,
+    rows: np.ndarray,
+    columns: list[str],
+) -> pa.Table:
+    """Read the requested rows of some columns, in the requested order."""
+    indices = vx.array(pa.array(np.sort(rows), type=pa.uint64()))
+    table = vx.open(str(artifact.path)).scan(indices=indices).read_all()
+    selected = table.to_arrow_table().select(columns)
+    return selected.take(pa.array(_ranks(rows)))
+
+
 def _read_vortex_all(artifact: Artifact, _: BenchmarkDataset) -> pa.Table:
     return vx.open(str(artifact.path)).to_arrow().read_all()
 
@@ -710,7 +1002,8 @@ def _read_vortex_wide_rows(
     dataset: BenchmarkDataset,
     rows: np.ndarray,
 ) -> np.ndarray:
-    return _read_vortex_wide_matrix(artifact, dataset)[rows, :]
+    table = _vortex_take(artifact, rows, dataset.feature_names)
+    return _table_to_matrix(table)
 
 
 def _read_vortex_fixed_rows(
@@ -718,7 +1011,8 @@ def _read_vortex_fixed_rows(
     dataset: BenchmarkDataset,
     rows: np.ndarray,
 ) -> np.ndarray:
-    return _read_vortex_fixed_matrix(artifact, dataset)[rows, :]
+    table = _vortex_take(artifact, rows, ["features"])
+    return _fixed_array_to_matrix(table["features"], dataset.dimensions)
 
 
 def _read_vortex_wide_features(
@@ -731,12 +1025,43 @@ def _read_vortex_wide_features(
     return table.to_pandas().to_numpy(dtype=np.float32)
 
 
+def _read_vortex_wide_mixed(
+    artifact: Artifact,
+    dataset: BenchmarkDataset,
+    rows: np.ndarray,
+    features: np.ndarray,
+) -> pd.DataFrame:
+    table = _read_vortex_all(artifact, dataset).select(
+        _mixed_columns(dataset, features)
+    )
+    return table.to_pandas().iloc[rows].reset_index(drop=True)
+
+
 def _read_vortex_fixed_features(
     artifact: Artifact,
     dataset: BenchmarkDataset,
     features: np.ndarray,
 ) -> np.ndarray:
     return _read_vortex_fixed_matrix(artifact, dataset)[:, features]
+
+
+def _read_vortex_fixed_mixed(
+    artifact: Artifact,
+    dataset: BenchmarkDataset,
+    rows: np.ndarray,
+    features: np.ndarray,
+) -> pd.DataFrame:
+    table = _read_vortex_all(artifact, dataset).select([*METADATA_COLUMNS, "features"])
+    metadata = table.select(METADATA_COLUMNS).to_pandas().iloc[rows]
+    matrix = _fixed_array_to_matrix(table["features"], dataset.dimensions)[
+        np.ix_(rows, features)
+    ]
+    return _mixed_frame(
+        metadata=metadata,
+        matrix=matrix,
+        dataset=dataset,
+        features=features,
+    )
 
 
 def _write_lance_wide(dataset: BenchmarkDataset, path: Path) -> Artifact:
@@ -757,7 +1082,9 @@ def _read_lance_all(artifact: Artifact, _: BenchmarkDataset) -> pa.Table:
 def _read_lance_wide_matrix(
     artifact: Artifact, dataset: BenchmarkDataset
 ) -> np.ndarray:
-    table = lance.dataset(artifact.path).to_table(columns=dataset.feature_names)
+    # Naming every column makes Lance plan each one: about 1.35 ms per column.
+    # Reading all columns and then selecting returns the same values much faster.
+    table = lance.dataset(artifact.path).to_table().select(dataset.feature_names)
     return table.to_pandas().to_numpy(dtype=np.float32)
 
 
@@ -773,7 +1100,8 @@ def _read_lance_wide_rows(
     dataset: BenchmarkDataset,
     rows: np.ndarray,
 ) -> np.ndarray:
-    return _read_lance_wide_matrix(artifact, dataset)[rows, :]
+    table = lance.dataset(artifact.path).take(rows).select(dataset.feature_names)
+    return _table_to_matrix(table)
 
 
 def _read_lance_fixed_rows(
@@ -781,7 +1109,8 @@ def _read_lance_fixed_rows(
     dataset: BenchmarkDataset,
     rows: np.ndarray,
 ) -> np.ndarray:
-    return _read_lance_fixed_matrix(artifact, dataset)[rows, :]
+    table = lance.dataset(artifact.path).take(rows, columns=["features"])
+    return _fixed_array_to_matrix(table["features"], dataset.dimensions)
 
 
 def _read_lance_wide_features(
@@ -794,6 +1123,18 @@ def _read_lance_wide_features(
     return table.to_pandas().to_numpy(dtype=np.float32)
 
 
+def _read_lance_wide_mixed(
+    artifact: Artifact,
+    dataset: BenchmarkDataset,
+    rows: np.ndarray,
+    features: np.ndarray,
+) -> pd.DataFrame:
+    table = lance.dataset(artifact.path).to_table(
+        columns=_mixed_columns(dataset, features)
+    )
+    return table.to_pandas().iloc[rows].reset_index(drop=True)
+
+
 def _read_lance_fixed_features(
     artifact: Artifact,
     dataset: BenchmarkDataset,
@@ -802,13 +1143,57 @@ def _read_lance_fixed_features(
     return _read_lance_fixed_matrix(artifact, dataset)[:, features]
 
 
-def _write_parquet_wide(dataset: BenchmarkDataset, path: Path) -> Artifact:
-    pq.write_table(_arrow_wide_table(dataset), path, compression="snappy")
+def _read_lance_fixed_mixed(
+    artifact: Artifact,
+    dataset: BenchmarkDataset,
+    rows: np.ndarray,
+    features: np.ndarray,
+) -> pd.DataFrame:
+    table = lance.dataset(artifact.path).to_table(
+        columns=[*METADATA_COLUMNS, "features"]
+    )
+    metadata = table.select(METADATA_COLUMNS).to_pandas().iloc[rows]
+    matrix = _fixed_array_to_matrix(table["features"], dataset.dimensions)[
+        np.ix_(rows, features)
+    ]
+    return _mixed_frame(
+        metadata=metadata,
+        matrix=matrix,
+        dataset=dataset,
+        features=features,
+    )
+
+
+def _parquet_options(profile: str, float_columns: list[str]) -> dict[str, Any]:
+    """Return `write_table` options for the default and compact profiles."""
+    if profile == "compact":
+        return {
+            "compression": "zstd",
+            "use_dictionary": False,
+            "use_byte_stream_split": float_columns,
+        }
+    return {"compression": "snappy"}
+
+
+def _write_parquet_wide(
+    dataset: BenchmarkDataset,
+    path: Path,
+    *,
+    profile: str = "default",
+) -> Artifact:
+    options = _parquet_options(profile, dataset.feature_names)
+    pq.write_table(_arrow_wide_table(dataset), path, **options)
     return Artifact(path=path, bytes=_artifact_size(path))
 
 
-def _write_parquet_fixed_array(dataset: BenchmarkDataset, path: Path) -> Artifact:
-    pq.write_table(_arrow_fixed_table(dataset), path, compression="snappy")
+def _write_parquet_fixed_array(
+    dataset: BenchmarkDataset,
+    path: Path,
+    *,
+    profile: str = "default",
+) -> Artifact:
+    options = _parquet_options(profile, ["features.list.element"])
+    pq.write_table(_arrow_fixed_table(dataset), path, **options)
     _write_sidecar_for_file(path, dataset.feature_names)
     return Artifact(path=path, bytes=_artifact_size(path) + _sidecar_size(path))
 
@@ -836,7 +1221,8 @@ def _read_parquet_wide_rows(
     dataset: BenchmarkDataset,
     rows: np.ndarray,
 ) -> np.ndarray:
-    return _read_parquet_wide_matrix(artifact, dataset)[rows, :]
+    table = pads.dataset(artifact.path).take(pa.array(rows))
+    return _table_to_matrix(table.select(dataset.feature_names))
 
 
 def _read_parquet_fixed_rows(
@@ -844,7 +1230,8 @@ def _read_parquet_fixed_rows(
     dataset: BenchmarkDataset,
     rows: np.ndarray,
 ) -> np.ndarray:
-    return _read_parquet_fixed_matrix(artifact, dataset)[rows, :]
+    table = pads.dataset(artifact.path).take(pa.array(rows), columns=["features"])
+    return _fixed_array_to_matrix(table["features"], dataset.dimensions)
 
 
 def _read_parquet_wide_features(
@@ -857,12 +1244,58 @@ def _read_parquet_wide_features(
     return table.to_pandas().to_numpy(dtype=np.float32)
 
 
+def _read_parquet_wide_mixed(
+    artifact: Artifact,
+    dataset: BenchmarkDataset,
+    rows: np.ndarray,
+    features: np.ndarray,
+) -> pd.DataFrame:
+    table = pq.read_table(artifact.path, columns=_mixed_columns(dataset, features))
+    return table.to_pandas().iloc[rows].reset_index(drop=True)
+
+
 def _read_parquet_fixed_features(
     artifact: Artifact,
     dataset: BenchmarkDataset,
     features: np.ndarray,
 ) -> np.ndarray:
     return _read_parquet_fixed_matrix(artifact, dataset)[:, features]
+
+
+def _read_parquet_fixed_mixed(
+    artifact: Artifact,
+    dataset: BenchmarkDataset,
+    rows: np.ndarray,
+    features: np.ndarray,
+) -> pd.DataFrame:
+    table = pq.read_table(artifact.path, columns=[*METADATA_COLUMNS, "features"])
+    metadata = table.select(METADATA_COLUMNS).to_pandas().iloc[rows]
+    matrix = _fixed_array_to_matrix(table["features"], dataset.dimensions)[
+        np.ix_(rows, features)
+    ]
+    return _mixed_frame(
+        metadata=metadata,
+        matrix=matrix,
+        dataset=dataset,
+        features=features,
+    )
+
+
+def _table_to_matrix(table: pa.Table) -> np.ndarray:
+    """Copy each column of an Arrow table into one float32 matrix."""
+    matrix = np.empty((table.num_rows, table.num_columns), dtype=np.float32)
+    for position, column in enumerate(table.columns):
+        matrix[:, position] = column.to_numpy()
+    return matrix
+
+
+def _ranks(rows: np.ndarray) -> np.ndarray:
+    """Return the position of each requested row in sorted order.
+
+    Vortex reads sorted row indices. Taking these ranks from the sorted result
+    restores the requested order.
+    """
+    return np.argsort(np.argsort(rows))
 
 
 def _fixed_array_to_matrix(column: pa.ChunkedArray, dimensions: int) -> np.ndarray:
@@ -889,8 +1322,7 @@ def _sidecar_size(path: Path) -> int:
 
 def _write_duckdb_wide(dataset: BenchmarkDataset, path: Path) -> Artifact:
     frame = wide_dataframe(dataset)
-    with duckdb.connect(str(path)) as connection:
-        connection.execute("SET threads = 1")
+    with _duckdb_connect(path, read_only=False) as connection:
         connection.register("profiles", frame)
         connection.execute("CREATE TABLE wide AS SELECT * FROM profiles")
         connection.execute("CHECKPOINT")
@@ -899,22 +1331,38 @@ def _write_duckdb_wide(dataset: BenchmarkDataset, path: Path) -> Artifact:
 
 def _write_duckdb_array(dataset: BenchmarkDataset, path: Path) -> Artifact:
     frame = array_dataframe(dataset)
-    with duckdb.connect(str(path)) as connection:
-        connection.execute("SET threads = 1")
+    with _duckdb_connect(path, read_only=False) as connection:
         connection.register("profiles", frame)
-        connection.execute("CREATE TABLE array_profiles AS SELECT * FROM profiles")
+        connection.execute(
+            "CREATE TABLE array_profiles AS SELECT "
+            f"{', '.join(METADATA_COLUMNS)}, "
+            f"CAST(features AS FLOAT[{dataset.dimensions}]) AS features "
+            "FROM profiles"
+        )
         connection.execute("CHECKPOINT")
     _write_sidecar_for_file(path, dataset.feature_names)
     return Artifact(path=path, bytes=_artifact_size(path) + _sidecar_size(path))
 
 
+def _duckdb_take(artifact: Artifact, table: str, rows: np.ndarray) -> pd.DataFrame:
+    """Read the requested rows by row id, in the requested order."""
+    wanted = ", ".join(str(int(row)) for row in rows)
+    with _duckdb_connect(artifact.path, read_only=True) as connection:
+        frame = connection.execute(
+            f"SELECT rowid AS profile_row, * FROM {table} WHERE rowid IN ({wanted})"
+        ).fetchdf()
+    position = {int(row): index for index, row in enumerate(rows)}
+    order = frame["profile_row"].map(position).to_numpy().argsort()
+    return frame.iloc[order].reset_index(drop=True)
+
+
 def _read_duckdb_wide_all(artifact: Artifact, _: BenchmarkDataset) -> pd.DataFrame:
-    with duckdb.connect(str(artifact.path), read_only=True) as connection:
+    with _duckdb_connect(artifact.path, read_only=True) as connection:
         return connection.execute("SELECT * FROM wide").fetchdf()
 
 
 def _read_duckdb_array_all(artifact: Artifact, _: BenchmarkDataset) -> pd.DataFrame:
-    with duckdb.connect(str(artifact.path), read_only=True) as connection:
+    with _duckdb_connect(artifact.path, read_only=True) as connection:
         return connection.execute("SELECT * FROM array_profiles").fetchdf()
 
 
@@ -922,13 +1370,13 @@ def _read_duckdb_wide_matrix(
     artifact: Artifact, dataset: BenchmarkDataset
 ) -> np.ndarray:
     columns = ", ".join(f'"{name}"' for name in dataset.feature_names)
-    with duckdb.connect(str(artifact.path), read_only=True) as connection:
+    with _duckdb_connect(artifact.path, read_only=True) as connection:
         frame = connection.execute(f"SELECT {columns} FROM wide").fetchdf()
     return frame.to_numpy(dtype=np.float32)
 
 
 def _read_duckdb_array_matrix(artifact: Artifact, _: BenchmarkDataset) -> np.ndarray:
-    with duckdb.connect(str(artifact.path), read_only=True) as connection:
+    with _duckdb_connect(artifact.path, read_only=True) as connection:
         frame = connection.execute("SELECT features FROM array_profiles").fetchdf()
     return np.vstack(frame["features"].to_numpy()).astype(np.float32, copy=False)
 
@@ -938,7 +1386,8 @@ def _read_duckdb_wide_rows(
     dataset: BenchmarkDataset,
     rows: np.ndarray,
 ) -> np.ndarray:
-    return _read_duckdb_wide_matrix(artifact, dataset)[rows, :]
+    frame = _duckdb_take(artifact, "wide", rows)
+    return frame[dataset.feature_names].to_numpy(dtype=np.float32)
 
 
 def _read_duckdb_array_rows(
@@ -946,7 +1395,8 @@ def _read_duckdb_array_rows(
     dataset: BenchmarkDataset,
     rows: np.ndarray,
 ) -> np.ndarray:
-    return _read_duckdb_array_matrix(artifact, dataset)[rows, :]
+    frame = _duckdb_take(artifact, "array_profiles", rows)
+    return np.vstack(frame["features"].to_numpy()).astype(np.float32, copy=False)
 
 
 def _read_duckdb_wide_features(
@@ -956,9 +1406,21 @@ def _read_duckdb_wide_features(
 ) -> np.ndarray:
     names = [dataset.feature_names[index] for index in features]
     columns = ", ".join(f'"{name}"' for name in names)
-    with duckdb.connect(str(artifact.path), read_only=True) as connection:
+    with _duckdb_connect(artifact.path, read_only=True) as connection:
         frame = connection.execute(f"SELECT {columns} FROM wide").fetchdf()
     return frame.to_numpy(dtype=np.float32)
+
+
+def _read_duckdb_wide_mixed(
+    artifact: Artifact,
+    dataset: BenchmarkDataset,
+    rows: np.ndarray,
+    features: np.ndarray,
+) -> pd.DataFrame:
+    columns = ", ".join(f'"{name}"' for name in _mixed_columns(dataset, features))
+    with _duckdb_connect(artifact.path, read_only=True) as connection:
+        frame = connection.execute(f"SELECT {columns} FROM wide").fetchdf()
+    return frame.iloc[rows].reset_index(drop=True)
 
 
 def _read_duckdb_array_features(
@@ -970,11 +1432,478 @@ def _read_duckdb_array_features(
         f"list_extract(features, {index + 1}) AS feature_{position}"
         for position, index in enumerate(features)
     )
-    with duckdb.connect(str(artifact.path), read_only=True) as connection:
+    with _duckdb_connect(artifact.path, read_only=True) as connection:
         frame = connection.execute(
             f"SELECT {expressions} FROM array_profiles"
         ).fetchdf()
     return frame.to_numpy(dtype=np.float32)
+
+
+def _read_duckdb_array_mixed(
+    artifact: Artifact,
+    dataset: BenchmarkDataset,
+    rows: np.ndarray,
+    features: np.ndarray,
+) -> pd.DataFrame:
+    columns = ", ".join(METADATA_COLUMNS)
+    with _duckdb_connect(artifact.path, read_only=True) as connection:
+        frame = connection.execute(
+            f"SELECT {columns}, features FROM array_profiles"
+        ).fetchdf()
+    selected = frame.iloc[rows]
+    matrix = np.vstack(selected["features"].to_numpy()).astype(np.float32, copy=False)[
+        :, features
+    ]
+    return _mixed_frame(
+        metadata=selected[list(METADATA_COLUMNS)],
+        matrix=matrix,
+        dataset=dataset,
+        features=features,
+    )
+
+
+def _zarr_compressor(*, compact: bool) -> dict[str, Any]:
+    """Return `create_dataset` options: the library default or Blosc with zstd."""
+    if not compact:
+        return {}
+    return {"compressor": Blosc(cname="zstd", clevel=5, shuffle=Blosc.SHUFFLE)}
+
+
+def _write_zarr_wide(
+    dataset: BenchmarkDataset,
+    path: Path,
+    *,
+    compact: bool = False,
+) -> Artifact:
+    root = zarr.open_group(str(path), mode="w")
+    _write_zarr_metadata(root, dataset, layout="wide")
+    feature_group = root.create_group("features")
+    chunks = (min(dataset.rows, 1024),)
+    for index, name in enumerate(dataset.feature_names):
+        feature_group.create_dataset(
+            name,
+            data=dataset.matrix[:, index],
+            chunks=chunks,
+            dtype="f4",
+            **_zarr_compressor(compact=compact),
+        )
+    return Artifact(path=path, bytes=_artifact_size(path))
+
+
+def _write_zarr_matrix(
+    dataset: BenchmarkDataset,
+    path: Path,
+    *,
+    compact: bool = False,
+) -> Artifact:
+    root = zarr.open_group(str(path), mode="w")
+    _write_zarr_metadata(root, dataset, layout="zarr_matrix")
+    root.create_dataset(
+        "features",
+        data=dataset.matrix,
+        chunks=(min(dataset.rows, 1024), min(dataset.dimensions, 1024)),
+        dtype="f4",
+        **_zarr_compressor(compact=compact),
+    )
+    return Artifact(path=path, bytes=_artifact_size(path))
+
+
+def _write_zarr_metadata(
+    root: zarr.hierarchy.Group,
+    dataset: BenchmarkDataset,
+    *,
+    layout: str,
+) -> None:
+    root.attrs["layout"] = layout
+    root.attrs["feature_names"] = dataset.feature_names
+    root.create_dataset("feature_names", data=_string_values(dataset.feature_names))
+    for column in ["sample_id", "plate_id", "well_id"]:
+        root.create_dataset(column, data=_string_values(dataset.metadata[column]))
+
+
+def _string_values(values: Iterable[object]) -> np.ndarray:
+    strings = [str(value) for value in values]
+    width = max(1, *(len(value) for value in strings))
+    return np.asarray(strings, dtype=f"U{width}")
+
+
+def _read_zarr_wide_all(artifact: Artifact, dataset: BenchmarkDataset) -> pd.DataFrame:
+    root = zarr.open_group(str(artifact.path), mode="r")
+    data = _zarr_metadata_frame(root).to_dict(orient="list")
+    feature_group = root["features"]
+    for name in dataset.feature_names:
+        data[name] = feature_group[name][:]
+    return pd.DataFrame(data)
+
+
+def _read_zarr_matrix_all(artifact: Artifact, _: BenchmarkDataset) -> dict[str, Any]:
+    root = zarr.open_group(str(artifact.path), mode="r")
+    return {
+        "metadata": _zarr_metadata_frame(root),
+        "feature_names": root["feature_names"][:],
+        "features": root["features"][:],
+    }
+
+
+def _zarr_metadata_frame(root: zarr.hierarchy.Group) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "sample_id": root["sample_id"][:],
+            "plate_id": root["plate_id"][:],
+            "well_id": root["well_id"][:],
+        }
+    )
+
+
+def _read_zarr_wide_matrix(artifact: Artifact, dataset: BenchmarkDataset) -> np.ndarray:
+    root = zarr.open_group(str(artifact.path), mode="r")
+    feature_group = root["features"]
+    columns = [feature_group[name][:] for name in dataset.feature_names]
+    return np.column_stack(columns).astype(np.float32, copy=False)
+
+
+def _read_zarr_matrix(artifact: Artifact, _: BenchmarkDataset) -> np.ndarray:
+    root = zarr.open_group(str(artifact.path), mode="r")
+    return np.asarray(root["features"][:], dtype=np.float32)
+
+
+def _read_zarr_wide_rows(
+    artifact: Artifact,
+    dataset: BenchmarkDataset,
+    rows: np.ndarray,
+) -> np.ndarray:
+    root = zarr.open_group(str(artifact.path), mode="r")
+    feature_group = root["features"]
+    columns = [feature_group[name].oindex[rows] for name in dataset.feature_names]
+    return np.column_stack(columns).astype(np.float32, copy=False)
+
+
+def _read_zarr_matrix_rows(
+    artifact: Artifact,
+    _dataset: BenchmarkDataset,
+    rows: np.ndarray,
+) -> np.ndarray:
+    root = zarr.open_group(str(artifact.path), mode="r")
+    return np.asarray(root["features"].oindex[rows, :], dtype=np.float32)
+
+
+def _read_zarr_wide_features(
+    artifact: Artifact,
+    dataset: BenchmarkDataset,
+    features: np.ndarray,
+) -> np.ndarray:
+    root = zarr.open_group(str(artifact.path), mode="r")
+    feature_group = root["features"]
+    names = [dataset.feature_names[index] for index in features]
+    columns = [feature_group[name][:] for name in names]
+    return np.column_stack(columns).astype(np.float32, copy=False)
+
+
+def _read_zarr_wide_mixed(
+    artifact: Artifact,
+    dataset: BenchmarkDataset,
+    rows: np.ndarray,
+    features: np.ndarray,
+) -> pd.DataFrame:
+    root = zarr.open_group(str(artifact.path), mode="r")
+    feature_group = root["features"]
+    names = _feature_names(dataset, features)
+    metadata = _zarr_metadata_frame(root).iloc[rows]
+    columns = [feature_group[name].oindex[rows] for name in names]
+    return _mixed_frame(
+        metadata=metadata,
+        matrix=np.column_stack(columns).astype(np.float32, copy=False),
+        dataset=dataset,
+        features=features,
+    )
+
+
+def _read_zarr_matrix_features(
+    artifact: Artifact,
+    _dataset: BenchmarkDataset,
+    features: np.ndarray,
+) -> np.ndarray:
+    root = zarr.open_group(str(artifact.path), mode="r")
+    return np.asarray(root["features"][:, features], dtype=np.float32)
+
+
+def _read_zarr_matrix_mixed(
+    artifact: Artifact,
+    dataset: BenchmarkDataset,
+    rows: np.ndarray,
+    features: np.ndarray,
+) -> pd.DataFrame:
+    root = zarr.open_group(str(artifact.path), mode="r")
+    metadata = _zarr_metadata_frame(root).iloc[rows]
+    matrix = np.asarray(root["features"].oindex[rows, features], dtype=np.float32)
+    return _mixed_frame(
+        metadata=metadata,
+        matrix=matrix,
+        dataset=dataset,
+        features=features,
+    )
+
+
+def _tiledb_filters(*, compact: bool) -> tiledb.FilterList:
+    """Return attribute filters: none by default, shuffle and zstd when compact."""
+    if not compact:
+        return tiledb.FilterList([])
+    return tiledb.FilterList([tiledb.ByteShuffleFilter(), tiledb.ZstdFilter(level=5)])
+
+
+def _write_tiledb_wide(
+    dataset: BenchmarkDataset,
+    path: Path,
+    *,
+    compact: bool = False,
+) -> Artifact:
+    domain = tiledb.Domain(_tiledb_profile_dim(dataset.rows))
+    attributes = [
+        tiledb.Attr(
+            name=name,
+            dtype=np.dtype("float32"),
+            filters=_tiledb_filters(compact=compact),
+        )
+        for name in dataset.feature_names
+    ]
+    schema = tiledb.ArraySchema(domain=domain, sparse=False, attrs=attributes)
+    tiledb.Array.create(str(path), schema)
+    with tiledb.open(str(path), "w") as array:
+        array[:] = {
+            name: dataset.matrix[:, index]
+            for index, name in enumerate(dataset.feature_names)
+        }
+        _write_tiledb_metadata(array, dataset, layout="wide")
+    return Artifact(path=path, bytes=_artifact_size(path))
+
+
+def _write_tiledb_dense(
+    dataset: BenchmarkDataset,
+    path: Path,
+    *,
+    compact: bool = False,
+) -> Artifact:
+    domain = tiledb.Domain(
+        _tiledb_profile_dim(dataset.rows),
+        tiledb.Dim(
+            name="feature",
+            domain=(0, dataset.dimensions - 1),
+            tile=min(dataset.dimensions, 1024),
+            dtype=np.dtype("int32"),
+        ),
+    )
+    schema = tiledb.ArraySchema(
+        domain=domain,
+        sparse=False,
+        attrs=[
+            tiledb.Attr(
+                name="value",
+                dtype=np.dtype("float32"),
+                filters=_tiledb_filters(compact=compact),
+            )
+        ],
+    )
+    tiledb.Array.create(str(path), schema)
+    with tiledb.open(str(path), "w") as array:
+        array[:] = dataset.matrix
+        _write_tiledb_metadata(array, dataset, layout="tiledb_dense")
+    return Artifact(path=path, bytes=_artifact_size(path))
+
+
+def _tiledb_profile_dim(rows: int) -> tiledb.Dim:
+    return tiledb.Dim(
+        name="profile",
+        domain=(0, rows - 1),
+        tile=min(rows, 1024),
+        dtype=np.dtype("int32"),
+    )
+
+
+def _write_tiledb_metadata(
+    array: tiledb.DenseArray,
+    dataset: BenchmarkDataset,
+    *,
+    layout: str,
+) -> None:
+    array.meta["layout"] = layout
+    array.meta["feature_names"] = json.dumps(dataset.feature_names)
+    for column in ["sample_id", "plate_id", "well_id"]:
+        array.meta[column] = json.dumps(dataset.metadata[column].to_list())
+
+
+def _read_tiledb_wide_all(
+    artifact: Artifact,
+    dataset: BenchmarkDataset,
+) -> pd.DataFrame:
+    with tiledb.open(str(artifact.path), "r") as array:
+        result = array[:]
+        data = _tiledb_metadata_frame(array).to_dict(orient="list")
+    for name in dataset.feature_names:
+        data[name] = result[name]
+    return pd.DataFrame(data)
+
+
+def _read_tiledb_dense_all(artifact: Artifact, _: BenchmarkDataset) -> dict[str, Any]:
+    with tiledb.open(str(artifact.path), "r") as array:
+        return {
+            "metadata": _tiledb_metadata_frame(array),
+            "feature_names": json.loads(str(array.meta["feature_names"])),
+            "features": array[:]["value"],
+        }
+
+
+def _tiledb_metadata_frame(array: tiledb.DenseArray) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            column: json.loads(str(array.meta[column]))
+            for column in ["sample_id", "plate_id", "well_id"]
+        }
+    )
+
+
+def _read_tiledb_wide_matrix(
+    artifact: Artifact, dataset: BenchmarkDataset
+) -> np.ndarray:
+    with tiledb.open(str(artifact.path), "r") as array:
+        result = array[:]
+    columns = [result[name] for name in dataset.feature_names]
+    return np.column_stack(columns).astype(np.float32, copy=False)
+
+
+def _read_tiledb_dense_matrix(
+    artifact: Artifact, _dataset: BenchmarkDataset
+) -> np.ndarray:
+    with tiledb.open(str(artifact.path), "r") as array:
+        return np.asarray(array[:]["value"], dtype=np.float32)
+
+
+def _read_tiledb_wide_rows(
+    artifact: Artifact,
+    dataset: BenchmarkDataset,
+    rows: np.ndarray,
+) -> np.ndarray:
+    with tiledb.open(str(artifact.path), "r") as array:
+        result = array.multi_index[rows]
+    columns = [result[name] for name in dataset.feature_names]
+    return np.column_stack(columns).astype(np.float32, copy=False)
+
+
+def _read_tiledb_dense_rows(
+    artifact: Artifact,
+    _dataset: BenchmarkDataset,
+    rows: np.ndarray,
+) -> np.ndarray:
+    with tiledb.open(str(artifact.path), "r") as array:
+        return np.asarray(array.multi_index[rows, :]["value"], dtype=np.float32)
+
+
+def _read_tiledb_wide_features(
+    artifact: Artifact,
+    dataset: BenchmarkDataset,
+    features: np.ndarray,
+) -> np.ndarray:
+    names = [dataset.feature_names[index] for index in features]
+    with tiledb.open(str(artifact.path), "r") as array:
+        result = array.query(attrs=names)[:]
+    columns = [result[name] for name in names]
+    return np.column_stack(columns).astype(np.float32, copy=False)
+
+
+def _read_tiledb_wide_mixed(
+    artifact: Artifact,
+    dataset: BenchmarkDataset,
+    rows: np.ndarray,
+    features: np.ndarray,
+) -> pd.DataFrame:
+    names = _feature_names(dataset, features)
+    with tiledb.open(str(artifact.path), "r") as array:
+        metadata = _tiledb_metadata_frame(array).iloc[rows]
+        result = array.query(attrs=names).multi_index[rows]
+    columns = [result[name] for name in names]
+    return _mixed_frame(
+        metadata=metadata,
+        matrix=np.column_stack(columns).astype(np.float32, copy=False),
+        dataset=dataset,
+        features=features,
+    )
+
+
+def _read_tiledb_dense_features(
+    artifact: Artifact,
+    _dataset: BenchmarkDataset,
+    features: np.ndarray,
+) -> np.ndarray:
+    with tiledb.open(str(artifact.path), "r") as array:
+        matrix = array[:]["value"]
+    return np.asarray(matrix[:, features], dtype=np.float32)
+
+
+def _read_tiledb_dense_mixed(
+    artifact: Artifact,
+    dataset: BenchmarkDataset,
+    rows: np.ndarray,
+    features: np.ndarray,
+) -> pd.DataFrame:
+    with tiledb.open(str(artifact.path), "r") as array:
+        metadata = _tiledb_metadata_frame(array).iloc[rows]
+        matrix = np.asarray(
+            array.multi_index[rows, :]["value"][:, features],
+            dtype=np.float32,
+        )
+    return _mixed_frame(
+        metadata=metadata,
+        matrix=matrix,
+        dataset=dataset,
+        features=features,
+    )
+
+
+def _read_mixed(
+    runner: LayoutRunner,
+    artifact: Artifact,
+    dataset: BenchmarkDataset,
+    rows: np.ndarray,
+    features: np.ndarray,
+) -> pd.DataFrame:
+    readers: dict[tuple[str, str], Callable[..., pd.DataFrame]] = {
+        ("csv", "wide"): _read_csv_wide_mixed,
+        ("csv", "delimited_array"): _read_csv_delimited_mixed,
+        ("csv", "json_array"): _read_csv_json_mixed,
+        ("parquet", "wide"): _read_parquet_wide_mixed,
+        ("parquet", "fixed_array"): _read_parquet_fixed_mixed,
+        ("duckdb", "wide"): _read_duckdb_wide_mixed,
+        ("duckdb", "duckdb_array"): _read_duckdb_array_mixed,
+        ("zarr", "wide"): _read_zarr_wide_mixed,
+        ("zarr", "zarr_matrix"): _read_zarr_matrix_mixed,
+        ("tiledb", "wide"): _read_tiledb_wide_mixed,
+        ("tiledb", "tiledb_dense"): _read_tiledb_dense_mixed,
+        ("vortex", "wide"): _read_vortex_wide_mixed,
+        ("vortex", "fixed_array"): _read_vortex_fixed_mixed,
+        ("lance", "wide"): _read_lance_wide_mixed,
+        ("lance", "fixed_array"): _read_lance_fixed_mixed,
+    }
+    return readers[(runner.backend, runner.layout)](artifact, dataset, rows, features)
+
+
+def _mixed_columns(dataset: BenchmarkDataset, features: np.ndarray) -> list[str]:
+    return [*METADATA_COLUMNS, *_feature_names(dataset, features)]
+
+
+def _feature_names(dataset: BenchmarkDataset, features: np.ndarray) -> list[str]:
+    return [dataset.feature_names[index] for index in features]
+
+
+def _mixed_frame(
+    *,
+    metadata: pd.DataFrame,
+    matrix: np.ndarray,
+    dataset: BenchmarkDataset,
+    features: np.ndarray,
+) -> pd.DataFrame:
+    frame = metadata.reset_index(drop=True).copy()
+    for position, name in enumerate(_feature_names(dataset, features)):
+        frame[name] = matrix[:, position]
+    return frame
 
 
 def _compute_norm_from_matrix(
@@ -998,24 +1927,119 @@ def _validate_artifact(
     assert_same_matrix(matrix, dataset.matrix)
 
 
+GENERATED_PATHS = ("results", "figures", "README.md")
+
+
 def _git_commit() -> str:
+    """Return the short commit hash, with `-dirty` when tracked code has changed.
+
+    Files that the benchmark itself writes do not count as changes.
+    """
     try:
-        return subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True,
-            check=True,
-            text=True,
-        ).stdout.strip()
+        commit = _git("rev-parse", "--short", "HEAD")
+        changes = _git(
+            "status",
+            "--porcelain",
+            "--untracked-files=no",
+            "--",
+            ".",
+            *(f":(exclude){path}" for path in GENERATED_PATHS),
+        )
     except (subprocess.CalledProcessError, FileNotFoundError):
         return "unknown"
+    return f"{commit}-dirty" if changes else commit
 
 
-def set_thread_environment(threads: int) -> None:
-    """Set common thread-count variables before backend imports do work."""
-    os.environ["OMP_NUM_THREADS"] = str(threads)
-    os.environ["OPENBLAS_NUM_THREADS"] = str(threads)
-    os.environ["MKL_NUM_THREADS"] = str(threads)
-    os.environ["NUMEXPR_NUM_THREADS"] = str(threads)
+def _git(*arguments: str) -> str:
+    return subprocess.run(
+        ["git", *arguments],
+        capture_output=True,
+        check=True,
+        text=True,
+    ).stdout.strip()
+
+
+_thread_limit = 1
+
+
+def apply_thread_limits(threads: int) -> dict[str, int | str]:
+    """Limit thread pools that the libraries expose and report what was set.
+
+    Lance and Vortex run their own native runtimes. This function cannot cap
+    them, so the measured CPU time in the results shows their real parallelism.
+    """
+    global _thread_limit  # noqa: PLW0603
+    _thread_limit = threads
+    pa.set_cpu_count(threads)
+    pa.set_io_thread_count(threads)
+    blosc.set_nthreads(threads)
+    blosc.use_threads = threads > 1
+    with contextlib.suppress(tiledb.TileDBError):
+        # The default context can be set once per process.
+        tiledb.default_ctx(
+            tiledb.Config(
+                {
+                    "sm.compute_concurrency_level": str(threads),
+                    "sm.io_concurrency_level": str(threads),
+                }
+            )
+        )
+    tiledb_level = int(tiledb.default_ctx().config()["sm.compute_concurrency_level"])
+    return {
+        "arrow_cpu_threads": pa.cpu_count(),
+        "arrow_io_threads": pa.io_thread_count(),
+        "duckdb_threads": threads,
+        "zarr_blosc_threads": threads,
+        "tiledb_concurrency_level": tiledb_level,
+        "lance": "library default",
+        "vortex": "library default",
+    }
+
+
+def hardware_info() -> dict[str, Any]:
+    """Return the CPU model, core count, and memory of this machine."""
+    return {
+        "cpu_model": _cpu_model(),
+        "logical_cores": os.cpu_count() or 1,
+        "memory_bytes": os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES"),
+    }
+
+
+def _cpu_model() -> str:
+    """Return a readable CPU name, with the platform name as a fallback."""
+    commands = [
+        ["sysctl", "-n", "machdep.cpu.brand_string"],
+        ["sh", "-c", "grep -m1 'model name' /proc/cpuinfo | cut -d: -f2"],
+    ]
+    for command in commands:
+        try:
+            name = subprocess.run(
+                command, capture_output=True, check=True, text=True
+            ).stdout.strip()
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            continue
+        if name:
+            return name
+    return platform.processor() or platform.machine() or "unknown"
+
+
+def _timed(call: Callable[[], Any]) -> tuple[Any, float, float]:
+    """Return the call result, wall seconds, and process CPU seconds."""
+    wall_start = time.perf_counter()
+    cpu_start = time.process_time()
+    value = call()
+    cpu = time.process_time() - cpu_start
+    wall = time.perf_counter() - wall_start
+    return value, wall, cpu
+
+
+def _duckdb_connect(path: Path, *, read_only: bool) -> duckdb.DuckDBPyConnection:
+    """Open a DuckDB database with the configured thread limit."""
+    return duckdb.connect(
+        str(path),
+        read_only=read_only,
+        config={"threads": _thread_limit},
+    )
 
 
 def read_raw_results(path: Path = Path("results/raw_results.parquet")) -> pd.DataFrame:
