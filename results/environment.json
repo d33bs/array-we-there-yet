@@ -19,15 +19,35 @@
     "threads": 1,
     "warmups": 1
   },
+  "hardware": {
+    "cpu_model": "Apple M4 Pro",
+    "logical_cores": 12,
+    "memory_bytes": 51539607552
+  },
   "packages": {
     "duckdb": "1.5.5",
     "lance": "12.0.0",
     "numpy": "2.2.6",
     "pandas": "2.2.3",
     "pyarrow": "25.0.1",
-    "vortex": "0.86.1"
+    "tiledb": [
+      0,
+      36,
+      1
+    ],
+    "vortex": "0.86.1",
+    "zarr": "2.18.7"
   },
   "platform": "macOS-26.7-arm64-arm-64bit",
   "processor": "arm",
-  "python": "3.11.13"
+  "python": "3.11.13",
+  "thread_limits": {
+    "arrow_cpu_threads": 1,
+    "arrow_io_threads": 1,
+    "duckdb_threads": 1,
+    "lance": "library default",
+    "tiledb_concurrency_level": 1,
+    "vortex": "library default",
+    "zarr_blosc_threads": 1
+  }
 }
