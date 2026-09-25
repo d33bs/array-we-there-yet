@@ -9,6 +9,7 @@ import pytest
 from array_we_there_yet import benchmark
 from array_we_there_yet.benchmark import LayoutRunner, layout_runners
 from array_we_there_yet.data import BenchmarkDataset, make_synthetic_dataset
+from array_we_there_yet.validation import assert_mixed_retrieval
 
 ROWS = np.array([37, 3, 19, 0, 25])  # unsorted on purpose
 NATIVE_ROW_READERS = [
@@ -118,3 +119,138 @@ def test_lance_wide_never_requests_every_column_by_name(
 
     assert _RecordingDataset.requested
     assert max(_RecordingDataset.requested) < dataset.dimensions
+
+
+FEATURES = np.array([4, 1, 5])
+NATIVE_MIXED = [
+    ("parquet", "wide"),
+    ("parquet", "fixed_array"),
+    ("duckdb", "wide"),
+    ("duckdb", "duckdb_array"),
+    ("vortex", "wide"),
+    ("vortex", "fixed_array"),
+    ("lance", "wide"),
+    ("lance", "fixed_array"),
+]
+
+
+@pytest.mark.parametrize(("backend", "layout"), NATIVE_MIXED)
+def test_mixed_retrieval_returns_the_requested_rows_and_features(
+    backend: str, layout: str, tmp_path: Path
+) -> None:
+    """Metadata and features match the source for unsorted rows and features."""
+    dataset = _dataset()
+    runner = _runner(backend, layout)
+    artifact = runner.write(dataset, tmp_path / "artifact")
+
+    frame = benchmark._read_mixed(runner, artifact, dataset, ROWS, FEATURES)
+
+    assert_mixed_retrieval(frame, dataset=dataset, rows=ROWS, features=FEATURES)
+
+
+def test_mixed_retrieval_uses_native_row_selection_in_lance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Lance mixed retrieval calls `take`, never a full `to_table` scan."""
+    dataset = _dataset()
+    calls: list[str] = []
+
+    class Spy:
+        def __init__(self, inner: Any) -> None:  # noqa: ANN401
+            self._inner = inner
+
+        def take(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            calls.append("take")
+            return self._inner.take(*args, **kwargs)
+
+        def to_table(self, *_: Any, **__: Any) -> Any:  # noqa: ANN401
+            message = "to_table scans every row"
+            raise AssertionError(message)
+
+    for layout in ["wide", "fixed_array"]:
+        runner = _runner("lance", layout)
+        artifact = runner.write(dataset, tmp_path / layout)
+        original = benchmark.lance.dataset
+        monkeypatch.setattr(
+            benchmark.lance, "dataset", lambda *a, _o=original, **k: Spy(_o(*a, **k))
+        )
+        benchmark._read_mixed(runner, artifact, dataset, ROWS, FEATURES)
+        monkeypatch.setattr(benchmark.lance, "dataset", original)
+
+    assert calls == ["take", "take"]
+
+
+def test_mixed_retrieval_uses_native_row_selection_in_parquet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Parquet mixed retrieval takes rows from a dataset, not a full table read."""
+    dataset = _dataset()
+
+    def forbidden(*_: Any, **__: Any) -> None:  # noqa: ANN401
+        message = "read_table reads every row"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(benchmark.pq, "read_table", forbidden)
+    for layout in ["wide", "fixed_array"]:
+        runner = _runner("parquet", layout)
+        artifact = runner.write(dataset, tmp_path / layout)
+
+        frame = benchmark._read_mixed(runner, artifact, dataset, ROWS, FEATURES)
+
+        assert len(frame) == len(ROWS)
+
+
+def test_mixed_retrieval_uses_row_ids_in_duckdb(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DuckDB mixed retrieval filters by row id in SQL."""
+    dataset = _dataset()
+    queries: list[str] = []
+    original = benchmark._duckdb_connect
+
+    class Recorder:
+        def __init__(self, connection: Any) -> None:  # noqa: ANN401
+            self._connection = connection
+
+        def __enter__(self) -> "Recorder":
+            self._connection.__enter__()
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            self._connection.__exit__(*exc)
+
+        def execute(self, sql: str, *args: Any) -> Any:  # noqa: ANN401
+            queries.append(sql)
+            return self._connection.execute(sql, *args)
+
+    for layout in ["wide", "duckdb_array"]:
+        runner = _runner("duckdb", layout)
+        artifact = runner.write(dataset, tmp_path / f"{layout}.duckdb")
+        queries.clear()
+        monkeypatch.setattr(
+            benchmark, "_duckdb_connect", lambda *a, **k: Recorder(original(*a, **k))
+        )
+        benchmark._read_mixed(runner, artifact, dataset, ROWS, FEATURES)
+        monkeypatch.setattr(benchmark, "_duckdb_connect", original)
+
+        assert any("rowid IN" in query for query in queries)
+
+
+def test_mixed_retrieval_does_not_read_every_row_in_vortex(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Vortex mixed retrieval scans by row index, not with a full read."""
+    dataset = _dataset()
+
+    def forbidden(*_: Any, **__: Any) -> None:  # noqa: ANN401
+        message = "_read_vortex_all reads every row"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(benchmark, "_read_vortex_all", forbidden)
+    for layout in ["wide", "fixed_array"]:
+        runner = _runner("vortex", layout)
+        artifact = runner.write(dataset, tmp_path / layout)
+
+        frame = benchmark._read_mixed(runner, artifact, dataset, ROWS, FEATURES)
+
+        assert len(frame) == len(ROWS)

@@ -10,11 +10,14 @@ from array_we_there_yet.report import (
     RESULTS_START,
     SETUP_END,
     SETUP_START,
+    _access_path_note,
     _cpu_time_note,
+    _noise_note,
     array_vs_wide_markdown,
     array_vs_wide_table,
     encoding_findings,
     environment_table,
+    render_results_section,
     render_setup_section,
     summary_section,
     update_readme,
@@ -296,7 +299,9 @@ def test_setup_section_holds_the_environment_and_the_backends() -> None:
     headings = [line for line in lines if line.startswith("#")]
     assert headings == ["## Environment", "## Backends and access paths"]
     text = "\n".join(lines)
-    assert "| CSV | `pandas` CSV I/O |" in text
+    assert "| Backend | Package or binding | Layouts measured |" in text
+    assert "| CSV | `pandas` CSV I/O | `wide`, `delimited_array` |" in text
+    assert "Impact on timing" not in text
     assert "not only the storage layout" in text
 
 
@@ -401,3 +406,106 @@ def test_cpu_time_note_is_absent_without_cpu_columns_or_multithreading() -> None
     assert _cpu_time_note(summary.drop(columns="median_cpu_seconds")) is None
     single = summary.assign(median_parallelism=1.0)
     assert _cpu_time_note(single) is None
+
+
+def _noisy_story() -> pd.DataFrame:
+    """Make Lance wide matrix materialization vary by 70% of its median."""
+    summary = _story_summary()
+    target = (
+        (summary["backend"] == "lance")
+        & (summary["layout"] == "wide")
+        & (summary["operation"] == "matrix_materialization")
+    )
+    summary.loc[target, "q25_seconds"] = 0.2
+    summary.loc[target, "q75_seconds"] = 0.9
+    summary["noisy"] = (summary["q75_seconds"] - summary["q25_seconds"]) > (
+        0.5 * summary["median_seconds"]
+    )
+    return summary
+
+
+def test_key_findings_mark_cells_whose_measurement_is_noisy() -> None:
+    """A cell built from a noisy measurement gets an asterisk."""
+    markdown = array_vs_wide_markdown(array_vs_wide_table(_noisy_story()))
+
+    assert (
+        "| Lance | `fixed_array` | 1,000x lower* | 10x lower | 0% | -10% |" in markdown
+    )
+    assert "| Parquet | `fixed_array` | -75% | -5% | -50% | -30% |" in markdown
+
+
+def test_noise_note_counts_noisy_measurements() -> None:
+    """The note says how many measurements vary by more than half their median."""
+    note = _noise_note(_noisy_story())
+
+    assert note is not None
+    assert note.startswith("* marks a cell")
+    assert "2 of 84 measurements (2%)" in note
+
+
+def test_noise_note_is_absent_when_nothing_is_noisy() -> None:
+    """Quiet results need no note, and neither do old results without the flag."""
+    summary = _noisy_story()
+
+    assert _noise_note(summary.assign(noisy=False)) is None
+    assert _noise_note(summary.drop(columns="noisy")) is None
+
+
+def test_access_path_note_confirms_layouts_are_in_range() -> None:
+    """Every layout is within three times of the reference operation."""
+    note = _access_path_note(_story_summary())
+
+    assert note == (
+        "Access path check: for every layout, matrix materialization takes at most "
+        "3 times as long as a full read, and random rows take at most 3 times as "
+        "long as matrix materialization."
+    )
+
+
+def test_access_path_note_names_a_layout_that_reads_too_much() -> None:
+    """A layout that is 20 times slower than its full read is named."""
+    summary = _story_summary()
+    target = (
+        (summary["backend"] == "lance")
+        & (summary["layout"] == "wide")
+        & (summary["operation"] == "matrix_materialization")
+    )
+    summary.loc[target, "median_seconds"] = 20.0
+
+    note = _access_path_note(summary)
+
+    assert note is not None
+    assert note.startswith("Access path check: these layouts are outside the range.")
+    assert (
+        "Lance `wide`: matrix materialization takes 20x as long as a full read" in note
+    )
+
+
+def test_environment_table_shows_when_runs_were_pooled() -> None:
+    """A pooled result says how many independent runs it contains."""
+    environment = _environment() | {"runs": 2}
+
+    table = environment_table(environment)
+
+    assert "| Runs | 2 independent runs of the same code, pooled |" in table
+    assert "Runs" not in environment_table(_environment())
+
+
+def test_key_findings_say_feature_projection_is_the_wide_layouts_best_case() -> None:
+    """A reader learns why array layouts can lose at feature projection."""
+    section = render_results_section(summary=_story_summary(), figure_paths=[])
+
+    assert (
+        "Feature projection reads 8 of 16 features, which is the best case for a "
+        "wide layout."
+    ) in section
+
+
+def test_sensitivity_table_says_what_the_conclusion_column_means() -> None:
+    """The label names the side of wide and does not imply an unchanged effect."""
+    summary = _compact_summary()
+    section = render_results_section(summary=summary, figure_paths=[])
+
+    assert "Same side of wide" in section or "Reverses" in section
+    assert "Same direction" not in section
+    assert "does not mean that the size of the effect stays the same" in section

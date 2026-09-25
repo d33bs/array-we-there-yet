@@ -64,6 +64,9 @@ def test_benchmark_runner_writes_results(tmp_path: Path) -> None:
     assert set(mixed["operation_parameter"]) == {"3_rows_2_features"}
     assert pd.api.types.is_float_dtype(raw["elapsed_seconds"])
     assert (raw["cpu_seconds"] >= 0).all()
+    assert (raw["calls"] >= 1).all()
+    assert (raw[raw["operation"] == "write"]["calls"] == 1).all()
+    assert raw[raw["operation"] == "matrix_materialization"]["calls"].max() > 1
     assert set(raw["profile"]) == {"default", "compact"}
     assert set(summary["profile"]) == {"default", "compact"}
     assert not list(config.output_dir.glob("*.csv"))
@@ -329,3 +332,30 @@ def test_git_commit_is_unknown_outside_a_repository(
     monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
 
     assert benchmark._git_commit() == "unknown"
+
+
+def test_calls_per_sample_repeats_fast_operations_up_to_a_limit() -> None:
+    """A fast call is repeated until one sample lasts about 50 ms."""
+    calls_for_one_millisecond = 50
+    assert benchmark._calls_per_sample(0.001) == calls_for_one_millisecond
+    assert benchmark._calls_per_sample(0.05) == 1
+    assert benchmark._calls_per_sample(0.5) == 1
+    assert benchmark._calls_per_sample(0.00001) == benchmark.MAX_CALLS_PER_SAMPLE
+    assert benchmark._calls_per_sample(0.0) == benchmark.MAX_CALLS_PER_SAMPLE
+
+
+def test_timed_repeated_calls_the_function_and_returns_the_last_value() -> None:
+    """The total time covers every call, and the caller divides by the count."""
+    repeats = 4
+    counter = {"calls": 0}
+
+    def call() -> int:
+        counter["calls"] += 1
+        return counter["calls"]
+
+    value, wall, cpu = benchmark._timed_repeated(call, repeats)
+
+    assert value == repeats
+    assert counter["calls"] == repeats
+    assert wall >= 0
+    assert cpu >= 0

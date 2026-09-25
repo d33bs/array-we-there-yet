@@ -1,7 +1,11 @@
 # Array We There Yet?
 
 A benchmark of storage formats for high-dimensional profile data.
-In this data, each row holds many numeric features.
+Profile data has one row for each sample, such as a well of cells or a document,
+and hundreds to thousands of numeric measurements for each row. These
+measurements are called features. Image-based profiling and embedding models
+produce this kind of data. The storage layout decides how fast a team can load
+the data and how much it costs to move it.
 
 The benchmark compares seven storage backends. For each backend, it measures a
 wide layout against an array-like layout:
@@ -24,7 +28,52 @@ the gain of any binary format.
 - **Selecting a few features.** Reading 8 features is faster in Vortex (25x), Lance (12x), and DuckDB (2.1x). It is about the same in Parquet. It is slower in Zarr (16x), CSV (5.8x), and TileDB (1.2x).
 - **Text packing.** CSV packed arrays are slower than CSV wide for write, matrix materialization, random rows, feature projection, mixed retrieval, and vector norm, and faster only for full read. They are 11% larger.
 - **Encoding settings matter.** Parquet's array layout is 29% smaller than its wide layout by default and 15% smaller with the compact profile. Default dictionary encoding inflates the wide layout.
-- **Limits.** These results come from a single machine, synthetic data, warm caches, and 3 repetitions per timing. See Limitations.
+- **Limits.** These results come from a single machine, synthetic data, warm caches, Python bindings, and 3 repetitions per timing. See Limitations.
+
+## Real-world example
+
+Egress is the fee that a cloud provider charges when data leaves its network. This example asks what it costs to move and read a 1.5 GB CSV wide file, and how much the other layouts save. The file holds about 16,800 rows of 8,192 features. A use is one download followed by one read into memory.
+
+**Takeaway.** With Parquet `fixed_array`, one use takes 5.9 s instead of 25 s and costs $0.05 instead of $0.14 in egress. Over 1,000 uses that saves 5.4 h and $85.
+
+### One use
+
+| Layout                          | Size    | Download | Read into memory | Total time | Egress cost |
+| ------------------------------- | ------- | -------- | ---------------- | ---------- | ----------- |
+| CSV `wide`                      | 1.5 GB  | 15 s     | 10 s             | 25 s       | $0.14       |
+| CSV `wide` (compact)            | 0.64 GB | 6.4 s    | 13 s             | 19 s       | $0.06       |
+| Parquet `wide`                  | 0.78 GB | 7.8 s    | 1.3 s            | 9.1 s      | $0.07       |
+| Parquet `fixed_array`           | 0.56 GB | 5.6 s    | 0.29 s           | 5.9 s      | $0.05       |
+| Parquet `fixed_array` (compact) | 0.46 GB | 4.6 s    | 0.42 s           | 5.1 s      | $0.04       |
+| DuckDB `duckdb_array`           | 0.49 GB | 4.9 s    | 0.29 s           | 5.2 s      | $0.04       |
+| Zarr `zarr_matrix`              | 0.52 GB | 5.2 s    | 0.27 s           | 5.4 s      | $0.05       |
+| TileDB `tiledb_dense`           | 0.56 GB | 5.6 s    | 0.094 s          | 5.7 s      | $0.05       |
+| Vortex `fixed_array`            | 0.49 GB | 4.9 s    | 0.043 s          | 4.9 s      | $0.04       |
+| Lance `fixed_array`             | 0.55 GB | 5.5 s    | 0.072 s          | 5.6 s      | $0.05       |
+
+### Savings over 1,000 uses
+
+Each cell compares a layout with CSV wide over 1,000 uses. Time saved is the sum of the download and read times.
+
+| Layout                          | Time saved | Egress saved |
+| ------------------------------- | ---------- | ------------ |
+| CSV `wide` (compact)            | 1.7 h      | $77          |
+| Parquet `wide`                  | 4.5 h      | $65          |
+| Parquet `fixed_array`           | 5.4 h      | $85          |
+| Parquet `fixed_array` (compact) | 5.6 h      | $93          |
+| DuckDB `duckdb_array`           | 5.6 h      | $91          |
+| Zarr `zarr_matrix`              | 5.5 h      | $89          |
+| TileDB `tiledb_dense`           | 5.4 h      | $84          |
+| Vortex `fixed_array`            | 5.7 h      | $91          |
+| Lance `fixed_array`             | 5.5 h      | $85          |
+
+Assumptions:
+
+- Download speed is 100 MB/s.
+- Egress costs $0.09 per GB. This is the AWS list price for data transfer out to the internet, first 10 TB each month ([AWS S3 pricing](https://aws.amazon.com/s3/pricing/)). The first 100 GB each month is free on AWS. The table ignores this, so it overstates the cost at low volume.
+- Sizes and read times scale linearly from the benchmark data. The benchmark does not measure files above 65 MB.
+- Read times use one thread and warm caches, except for Lance and Vortex. See Limitations.
+- 1 GB is 1,000,000,000 bytes.
 
 ## Results
 
@@ -169,19 +218,18 @@ variable-length list.
 
 Each run measures these operations:
 
-| Operation              | Description                                                                                                                  |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| Write                  | Write the full dataset.                                                                                                      |
-| Full read              | Read the full table.                                                                                                         |
-| Matrix materialization | Read the data into one `N x D` NumPy array.                                                                                  |
-| Random rows            | Read 128 random rows, using each format's own row-selection call. CSV has none, so it reads the whole file.                  |
-| Feature projection     | Read a fixed set of features.                                                                                                |
-| Mixed retrieval        | Read metadata and selected features together. The selected columns are read for all rows, and the rows are picked afterward. |
-| Vector norm            | Read the matrix as in matrix materialization, then compute the L2 norm of each row in NumPy.                                 |
+| Operation              | Description                                                                                                     |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Write                  | Write the full dataset.                                                                                         |
+| Full read              | Read the full table.                                                                                            |
+| Matrix materialization | Read the data into one `N x D` NumPy array.                                                                     |
+| Random rows            | Read 128 random rows, using each format's own row-selection call. CSV has none, so it reads the whole file.     |
+| Feature projection     | Read a fixed set of features.                                                                                   |
+| Mixed retrieval        | Read metadata and selected features together, using each format's row-selection call. CSV reads the whole file. |
+| Vector norm            | Read the matrix as in matrix materialization, then compute the L2 norm of each row in NumPy.                    |
 
 Each result is stored as an absolute time. The report also stores ratios to CSV
-wide and ratios to the wide layout of the same backend. A ratio below `1.0`
-means the layout is faster or smaller than its reference.
+wide and ratios to the wide layout of the same backend.
 
 ## Methodology
 
@@ -193,7 +241,11 @@ means the layout is faster or smaller than its reference.
   operation on the last artifact. One warmup run comes before the measured runs.
 - **Timing.** Wall time comes from `time.perf_counter`. CPU time comes from
   `time.process_time`, which counts every thread in the process. Checking the
-  returned values happens after the timer stops and is not included.
+  returned values happens after the timer stops and is not included. A read that
+  takes less than 50 ms repeats inside one sample until the sample lasts at least
+  50 ms. The benchmark divides the sample time by the number of calls and stores
+  the call count in the raw results. This removes most of the timer and
+  thread-start noise from fast reads.
 - **Cache state.** The benchmark does not drop the operating system page cache.
   All reads are warm-cache reads.
 - **Selections.** Random rows and projected features are 128 rows and 8 features
@@ -212,9 +264,12 @@ means the layout is faster or smaller than its reference.
   backend. Full read returns the native object of each library: an Arrow table,
   a pandas DataFrame, or a dictionary of arrays. Full read times therefore
   include different conversion work.
-- **Statistics.** Each timing is the median of the repeated runs. Error bars are
-  the q25-to-q75 range. Ratios divide medians. Summary panels average ratios
-  with the geometric mean.
+- **Statistics.** Each timing is the median of all repetitions. The results pool
+  independent runs of the same code, so the error bars show the variation
+  between runs and not only within one run. Error bars are the q25-to-q75 range.
+  Ratios divide medians. Summary panels average ratios with the geometric mean.
+  A measurement that varies by more than half of its median is marked with `*`.
+  Pooling refuses runs from different commits or from uncommitted code.
 - **Threads.** The benchmark asks for one thread. It enforces this for Arrow,
   DuckDB, TileDB, and the Blosc compressor that Zarr uses. Lance and Vortex use
   native thread pools that the benchmark cannot limit. The `median_parallelism` column in
@@ -224,6 +279,14 @@ means the layout is faster or smaller than its reference.
   every thread.
 - **Correctness.** Every write and read is checked for shape, `float32` type, and
   values within `1e-6` of the source data.
+- **Access path check.** For each layout, matrix materialization should take
+  about as long as a full read, and random rows should not take longer than
+  matrix materialization. The report flags a layout that takes more than three
+  times as long. This check finds readers that ask a library for far more than an
+  operation needs.
+- **Floor.** A plain NumPy `.npy` file is timed for the same operations. It is
+  the speed of a memory copy, so no format can be faster. The report divides each
+  layout's time by the floor time.
 - **Encodings.** Each format runs with its default settings. Formats with a
   verified compression setting also run a compact profile. Encoding and
   compression choices change file size and speed. The Encoding sensitivity table
@@ -294,12 +357,10 @@ table and the appendix compare the two.
 - **Scale.** The largest dataset is about 65 MB and fits in memory. It does not
   show row-group, chunk, or fragment behavior at scale, or reads that exceed
   memory.
-- **Repetitions.** Each timing uses 3 repetitions, so the q25-to-q75 error bars
-  come from only 3 values. A second full run with the same settings agreed with
-  the first within 2% for the median measurement, and within 12% for 90% of the
-  measurements. About 1 in 20 measurements differed by more than 25%. They were
-  mostly write timings, especially TileDB writes, and timings of a few
-  milliseconds or less. The error bars understate this run-to-run variation.
+- **Repetitions.** Each run makes 3 repetitions of each measurement. The results
+  pool the runs listed in the Environment table. Write timings vary the most,
+  especially TileDB writes. They can differ between runs by many times. The
+  report marks measurements that vary by more than half of their median.
 - **Cache.** The results do not show cold-storage or object-storage reads.
 - **Data.** Independent random values are close to the worst case for compression.
   The best possible lossless size for this data is about 3.3 bytes per value. The
@@ -348,6 +409,22 @@ The defaults use 2,000 rows, 256 to 8,192 features, three measured repetitions,
 and one warmup run. A full run takes about 4 hours on the machine in the
 Environment table.
 
+Run the same code twice, then pool the runs. Move the first run's results to a
+new directory before the second run starts:
+
+```bash
+uv run array-we-there-yet run --output_dir=results_a --figure_dir=figures_a --update_readme_file=False
+uv run array-we-there-yet run --output_dir=results_b --figure_dir=figures_b --update_readme_file=False
+uv run array-we-there-yet combine --inputs=results_a,results_b
+```
+
+Rebuild the tables, figures, and README from saved raw results without a new
+run:
+
+```bash
+uv run array-we-there-yet report
+```
+
 Run a small smoke test:
 
 ```bash
@@ -367,6 +444,8 @@ The benchmark writes these files:
 | `results/ratio_summary.parquet`             | Array-like ratios to the wide layout of the same backend. |
 | `results/profile_comparison.parquet`        | Compact profile ratios to the default profile.            |
 | `results/encodings.parquet`                 | Compression and encodings that each format wrote.         |
+| `results/floor_results.parquet`             | One row per measurement of the plain NumPy file.          |
+| `results/floor_summary.parquet`             | Median timings of the plain NumPy file.                   |
 | `results/environment.json`                  | Configuration and package versions.                       |
 | `figures/*.png`                             | Figures, including one plot for each operation.           |
 

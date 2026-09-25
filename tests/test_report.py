@@ -90,6 +90,9 @@ def test_results_section_has_a_professional_structure(tmp_path: Path) -> None:
     headings = [line for line in section.splitlines() if line.startswith("#")]
     assert headings == [
         "## Summary",
+        "## Real-world example",
+        "### One use",
+        "### Savings over 1,000 uses",
         "## Results",
         "### Key findings",
         "### How to read the figures",

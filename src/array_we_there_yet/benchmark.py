@@ -6,6 +6,7 @@ import contextlib
 import dataclasses
 import functools
 import json
+import math
 import os
 import platform
 import shutil
@@ -50,6 +51,7 @@ Layout = Literal[
     "duckdb_array",
     "zarr_matrix",
     "tiledb_dense",
+    "npy",
 ]
 METADATA_COLUMNS = ("sample_id", "plate_id", "well_id")
 
@@ -95,6 +97,7 @@ class BenchmarkResult:
     git_commit: str
     rows_per_second: float | None = None
     values_per_second: float | None = None
+    calls: int = 1
 
 
 @dataclass(frozen=True)
@@ -164,10 +167,91 @@ def _remove_artifacts(
         _sidecar_path(path).unlink(missing_ok=True)
 
 
+def _write_npy(dataset: BenchmarkDataset, path: Path) -> Artifact:
+    np.save(path, dataset.matrix)
+    return Artifact(path=path, bytes=_artifact_size(path))
+
+
+def _read_npy(artifact: Artifact, _: BenchmarkDataset) -> np.ndarray:
+    return np.load(artifact.path)
+
+
+def _read_npy_rows(
+    artifact: Artifact, _: BenchmarkDataset, rows: np.ndarray
+) -> np.ndarray:
+    return np.asarray(np.load(artifact.path, mmap_mode="r")[rows])
+
+
+def _read_npy_features(
+    artifact: Artifact, _: BenchmarkDataset, features: np.ndarray
+) -> np.ndarray:
+    return np.array(np.load(artifact.path, mmap_mode="r")[:, features])
+
+
+def _npy_norm(artifact: Artifact, dataset: BenchmarkDataset) -> np.ndarray:
+    return np.linalg.norm(_read_npy(artifact, dataset), axis=1)
+
+
+def numpy_floor_runner() -> LayoutRunner:
+    """Return the plain NumPy file used as a speed-of-light baseline.
+
+    It is not part of `layout_runners`, so it does not appear in the layout
+    comparisons. It shows how far each format is from a plain memory copy.
+    """
+    return LayoutRunner(
+        backend="numpy",
+        layout="npy",
+        compression="none",
+        write=_write_npy,
+        read_all=_read_npy,
+        read_matrix=_read_npy,
+        read_rows=_read_npy_rows,
+        read_features=_read_npy_features,
+        compute_norm=_npy_norm,
+    )
+
+
+def measure_numpy_floor(
+    *,
+    config: BenchmarkConfig,
+    dataset: BenchmarkDataset,
+    selected_rows: np.ndarray,
+    selected_features: np.ndarray,
+    timestamp: str,
+    git_commit: str,
+) -> list[BenchmarkResult]:
+    """Time a plain `.npy` file for one feature count and remove it."""
+    runner = numpy_floor_runner()
+    records: list[BenchmarkResult] = []
+    artifact = _measure_writes(
+        config=config,
+        runner=runner,
+        dataset=dataset,
+        timestamp=timestamp,
+        git_commit=git_commit,
+        records=records,
+    )
+    _measure_reads(
+        config=config,
+        runner=runner,
+        dataset=dataset,
+        artifact=artifact,
+        selected_rows=np.asarray(selected_rows),
+        selected_features=np.asarray(selected_features),
+        timestamp=timestamp,
+        git_commit=git_commit,
+        records=records,
+        include_mixed=False,
+    )
+    _remove_artifacts(config, runner, dataset)
+    return records
+
+
 def _write_raw_results(
     config: BenchmarkConfig,
     records: list[BenchmarkResult],
     encodings: list[dict[str, object]],
+    floor: list[BenchmarkResult] | None = None,
 ) -> pd.DataFrame:
     """Write the results so far, so that a crash keeps finished feature counts."""
     raw = pd.DataFrame(asdict(record) for record in records)
@@ -175,6 +259,10 @@ def _write_raw_results(
     pd.DataFrame(encodings).to_parquet(
         config.output_dir / "encodings.parquet", index=False
     )
+    if floor:
+        pd.DataFrame(asdict(record) for record in floor).to_parquet(
+            config.output_dir / "floor_results.parquet", index=False
+        )
     return raw
 
 
@@ -188,6 +276,7 @@ def run_benchmarks(config: BenchmarkConfig) -> pd.DataFrame:
     _check_disk_space(config)
 
     records: list[BenchmarkResult] = []
+    floor: list[BenchmarkResult] = []
     encodings: list[dict[str, object]] = []
     timestamp = pd.Timestamp.utcnow().isoformat()
     git_commit = _git_commit()
@@ -243,15 +332,79 @@ def run_benchmarks(config: BenchmarkConfig) -> pd.DataFrame:
             )
             _remove_artifacts(config, runner, dataset)
 
-        _write_raw_results(config, records, encodings)
+        floor.extend(
+            measure_numpy_floor(
+                config=config,
+                dataset=dataset,
+                selected_rows=selected_rows,
+                selected_features=selected_features,
+                timestamp=timestamp,
+                git_commit=git_commit,
+            )
+        )
+        _write_raw_results(config, records, encodings, floor)
 
-    raw = _write_raw_results(config, records, encodings)
+    raw = _write_raw_results(config, records, encodings, floor)
     write_environment(config.output_dir, config, thread_limits)
     return raw
 
 
+def combine_runs(
+    input_dirs: list[Path],
+    output_dir: Path,
+    *,
+    allow_dirty: bool = False,
+) -> pd.DataFrame:
+    """Pool the raw results of several runs of the same code.
+
+    Every raw row is kept and gets a `run` number, so the summary of the pooled
+    results shows the variation between runs and not only within one run.
+    """
+    if len(input_dirs) < 2:  # noqa: PLR2004
+        message = "Pooling needs at least two runs."
+        raise ValueError(message)
+    raws = [pd.read_parquet(path / "raw_results.parquet") for path in input_dirs]
+    commits = {str(commit) for raw in raws for commit in raw["git_commit"].unique()}
+    if len(commits) > 1:
+        message = f"The runs come from different code versions: {sorted(commits)}."
+        raise ValueError(message)
+    if any(commit.endswith("-dirty") for commit in commits) and not allow_dirty:
+        message = (
+            f"The runs used uncommitted code ({sorted(commits)}). Commit the code "
+            "and run again, or pass allow_dirty."
+        )
+        raise ValueError(message)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    combined = pd.concat(
+        [raw.assign(run=number) for number, raw in enumerate(raws, start=1)],
+        ignore_index=True,
+    )
+    combined.to_parquet(output_dir / "raw_results.parquet", index=False)
+    floors = [
+        pd.read_parquet(path / "floor_results.parquet").assign(run=number)
+        for number, path in enumerate(input_dirs, start=1)
+        if (path / "floor_results.parquet").exists()
+    ]
+    if floors:
+        pd.concat(floors, ignore_index=True).to_parquet(
+            output_dir / "floor_results.parquet", index=False
+        )
+    shutil.copy(input_dirs[0] / "encodings.parquet", output_dir / "encodings.parquet")
+    environment = json.loads(
+        (input_dirs[0] / "environment.json").read_text(encoding="utf-8")
+    )
+    environment["runs"] = len(input_dirs)
+    (output_dir / "environment.json").write_text(
+        json.dumps(environment, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    return combined
+
+
 def summarize_results(
-    raw: pd.DataFrame, output_dir: Path = Path("results")
+    raw: pd.DataFrame,
+    output_dir: Path = Path("results"),
+    file_name: str = "summary.parquet",
 ) -> pd.DataFrame:
     """Summarize raw timings with median and interquartile values."""
     group_columns = [
@@ -281,8 +434,11 @@ def summarize_results(
         )
         .reset_index()
     )
+    summary["noisy"] = (summary["q75_seconds"] - summary["q25_seconds"]) > (
+        NOISY_RANGE * summary["median_seconds"]
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
-    summary.to_parquet(output_dir / "summary.parquet", index=False)
+    summary.to_parquet(output_dir / file_name, index=False)
     return summary
 
 
@@ -593,6 +749,7 @@ def _measure_reads(
     timestamp: str,
     git_commit: str,
     records: list[BenchmarkResult],
+    include_mixed: bool = True,
 ) -> None:
     operations: list[tuple[str, str, Callable[[], Any], Callable[[Any], None]]] = [
         (
@@ -648,11 +805,17 @@ def _measure_reads(
             ),
         ),
     ]
+    if not include_mixed:
+        operations = [item for item in operations if item[0] != "mixed_retrieval"]
     for operation, parameter, call, validate in operations:
-        for _ in range(config.warmups):
-            validate(call())
+        # At least one untimed call gives the size of a single call.
+        warmup_seconds = 0.0
+        for _ in range(max(config.warmups, 1)):
+            value, warmup_seconds, _cpu = _timed(call)
+            validate(value)
+        calls = _calls_per_sample(warmup_seconds)
         for iteration in range(config.measured_repetitions):
-            value, elapsed, cpu = _timed(call)
+            value, elapsed, cpu = _timed_repeated(call, calls)
             validate(value)
             records.append(
                 _result(
@@ -662,11 +825,12 @@ def _measure_reads(
                     operation=operation,
                     operation_parameter=parameter,
                     iteration=iteration,
-                    elapsed=elapsed,
-                    cpu=cpu,
+                    elapsed=elapsed / calls,
+                    cpu=cpu / calls,
                     artifact=artifact,
                     timestamp=timestamp,
                     git_commit=git_commit,
+                    calls=calls,
                 )
             )
 
@@ -686,6 +850,7 @@ def _result(
     git_commit: str,
     rows_per_second: float | None = None,
     values_per_second: float | None = None,
+    calls: int = 1,
 ) -> BenchmarkResult:
     return BenchmarkResult(
         backend=runner.backend,
@@ -708,6 +873,7 @@ def _result(
         git_commit=git_commit,
         rows_per_second=rows_per_second,
         values_per_second=values_per_second,
+        calls=calls,
     )
 
 
@@ -734,6 +900,7 @@ def _artifact_path(
         "lance": ".lance",
         "zarr": ".zarr",
         "tiledb": ".tiledb",
+        "numpy": ".npy",
     }[runner.backend]
     return config.artifact_dir / f"{name}{suffix}"
 
@@ -967,15 +1134,20 @@ def _write_vortex_fixed_array(dataset: BenchmarkDataset, path: Path) -> Artifact
     return Artifact(path=path, bytes=_artifact_size(path) + _sidecar_size(path))
 
 
+def _vortex_scan(artifact: Artifact, rows: np.ndarray) -> pa.Table:
+    """Read the requested rows in file order. Vortex needs sorted row indices."""
+    indices = vx.array(pa.array(np.sort(rows), type=pa.uint64()))
+    table = vx.open(str(artifact.path)).scan(indices=indices).read_all()
+    return table.to_arrow_table()
+
+
 def _vortex_take(
     artifact: Artifact,
     rows: np.ndarray,
     columns: list[str],
 ) -> pa.Table:
     """Read the requested rows of some columns, in the requested order."""
-    indices = vx.array(pa.array(np.sort(rows), type=pa.uint64()))
-    table = vx.open(str(artifact.path)).scan(indices=indices).read_all()
-    selected = table.to_arrow_table().select(columns)
+    selected = _vortex_scan(artifact, rows).select(columns)
     return selected.take(pa.array(_ranks(rows)))
 
 
@@ -1031,10 +1203,8 @@ def _read_vortex_wide_mixed(
     rows: np.ndarray,
     features: np.ndarray,
 ) -> pd.DataFrame:
-    table = _read_vortex_all(artifact, dataset).select(
-        _mixed_columns(dataset, features)
-    )
-    return table.to_pandas().iloc[rows].reset_index(drop=True)
+    table = _vortex_scan(artifact, rows).select(_mixed_columns(dataset, features))
+    return table.to_pandas().iloc[_ranks(rows)].reset_index(drop=True)
 
 
 def _read_vortex_fixed_features(
@@ -1051,10 +1221,11 @@ def _read_vortex_fixed_mixed(
     rows: np.ndarray,
     features: np.ndarray,
 ) -> pd.DataFrame:
-    table = _read_vortex_all(artifact, dataset).select([*METADATA_COLUMNS, "features"])
-    metadata = table.select(METADATA_COLUMNS).to_pandas().iloc[rows]
-    matrix = _fixed_array_to_matrix(table["features"], dataset.dimensions)[
-        np.ix_(rows, features)
+    table = _vortex_scan(artifact, rows)
+    order = _ranks(rows)
+    metadata = table.select(METADATA_COLUMNS).to_pandas().iloc[order]
+    matrix = _fixed_array_to_matrix(table["features"], dataset.dimensions)[order, :][
+        :, features
     ]
     return _mixed_frame(
         metadata=metadata,
@@ -1129,10 +1300,10 @@ def _read_lance_wide_mixed(
     rows: np.ndarray,
     features: np.ndarray,
 ) -> pd.DataFrame:
-    table = lance.dataset(artifact.path).to_table(
-        columns=_mixed_columns(dataset, features)
+    table = lance.dataset(artifact.path).take(
+        rows, columns=_mixed_columns(dataset, features)
     )
-    return table.to_pandas().iloc[rows].reset_index(drop=True)
+    return table.to_pandas().reset_index(drop=True)
 
 
 def _read_lance_fixed_features(
@@ -1149,13 +1320,11 @@ def _read_lance_fixed_mixed(
     rows: np.ndarray,
     features: np.ndarray,
 ) -> pd.DataFrame:
-    table = lance.dataset(artifact.path).to_table(
-        columns=[*METADATA_COLUMNS, "features"]
+    table = lance.dataset(artifact.path).take(
+        rows, columns=[*METADATA_COLUMNS, "features"]
     )
-    metadata = table.select(METADATA_COLUMNS).to_pandas().iloc[rows]
-    matrix = _fixed_array_to_matrix(table["features"], dataset.dimensions)[
-        np.ix_(rows, features)
-    ]
+    metadata = table.select(METADATA_COLUMNS).to_pandas()
+    matrix = _fixed_array_to_matrix(table["features"], dataset.dimensions)[:, features]
     return _mixed_frame(
         metadata=metadata,
         matrix=matrix,
@@ -1250,8 +1419,10 @@ def _read_parquet_wide_mixed(
     rows: np.ndarray,
     features: np.ndarray,
 ) -> pd.DataFrame:
-    table = pq.read_table(artifact.path, columns=_mixed_columns(dataset, features))
-    return table.to_pandas().iloc[rows].reset_index(drop=True)
+    table = pads.dataset(artifact.path).take(
+        pa.array(rows), columns=_mixed_columns(dataset, features)
+    )
+    return table.to_pandas().reset_index(drop=True)
 
 
 def _read_parquet_fixed_features(
@@ -1268,11 +1439,11 @@ def _read_parquet_fixed_mixed(
     rows: np.ndarray,
     features: np.ndarray,
 ) -> pd.DataFrame:
-    table = pq.read_table(artifact.path, columns=[*METADATA_COLUMNS, "features"])
-    metadata = table.select(METADATA_COLUMNS).to_pandas().iloc[rows]
-    matrix = _fixed_array_to_matrix(table["features"], dataset.dimensions)[
-        np.ix_(rows, features)
-    ]
+    table = pads.dataset(artifact.path).take(
+        pa.array(rows), columns=[*METADATA_COLUMNS, "features"]
+    )
+    metadata = table.select(METADATA_COLUMNS).to_pandas()
+    matrix = _fixed_array_to_matrix(table["features"], dataset.dimensions)[:, features]
     return _mixed_frame(
         metadata=metadata,
         matrix=matrix,
@@ -1344,12 +1515,18 @@ def _write_duckdb_array(dataset: BenchmarkDataset, path: Path) -> Artifact:
     return Artifact(path=path, bytes=_artifact_size(path) + _sidecar_size(path))
 
 
-def _duckdb_take(artifact: Artifact, table: str, rows: np.ndarray) -> pd.DataFrame:
+def _duckdb_take(
+    artifact: Artifact,
+    table: str,
+    rows: np.ndarray,
+    columns: str = "*",
+) -> pd.DataFrame:
     """Read the requested rows by row id, in the requested order."""
     wanted = ", ".join(str(int(row)) for row in rows)
     with _duckdb_connect(artifact.path, read_only=True) as connection:
         frame = connection.execute(
-            f"SELECT rowid AS profile_row, * FROM {table} WHERE rowid IN ({wanted})"
+            f"SELECT rowid AS profile_row, {columns} FROM {table} "
+            f"WHERE rowid IN ({wanted})"
         ).fetchdf()
     position = {int(row): index for index, row in enumerate(rows)}
     order = frame["profile_row"].map(position).to_numpy().argsort()
@@ -1418,9 +1595,8 @@ def _read_duckdb_wide_mixed(
     features: np.ndarray,
 ) -> pd.DataFrame:
     columns = ", ".join(f'"{name}"' for name in _mixed_columns(dataset, features))
-    with _duckdb_connect(artifact.path, read_only=True) as connection:
-        frame = connection.execute(f"SELECT {columns} FROM wide").fetchdf()
-    return frame.iloc[rows].reset_index(drop=True)
+    frame = _duckdb_take(artifact, "wide", rows, columns)
+    return frame.drop(columns="profile_row")
 
 
 def _read_duckdb_array_features(
@@ -1445,12 +1621,8 @@ def _read_duckdb_array_mixed(
     rows: np.ndarray,
     features: np.ndarray,
 ) -> pd.DataFrame:
-    columns = ", ".join(METADATA_COLUMNS)
-    with _duckdb_connect(artifact.path, read_only=True) as connection:
-        frame = connection.execute(
-            f"SELECT {columns}, features FROM array_profiles"
-        ).fetchdf()
-    selected = frame.iloc[rows]
+    columns = ", ".join([*METADATA_COLUMNS, "features"])
+    selected = _duckdb_take(artifact, "array_profiles", rows, columns)
     matrix = np.vstack(selected["features"].to_numpy()).astype(np.float32, copy=False)[
         :, features
     ]
@@ -2021,6 +2193,35 @@ def _cpu_model() -> str:
         if name:
             return name
     return platform.processor() or platform.machine() or "unknown"
+
+
+MIN_SAMPLE_SECONDS = 0.05
+NOISY_RANGE = 0.5
+MAX_CALLS_PER_SAMPLE = 1_000
+
+
+def _calls_per_sample(call_seconds: float) -> int:
+    """Return how many calls make one sample last at least 50 ms.
+
+    Timings of a few milliseconds are dominated by timer and thread start-up
+    noise. Repeating the call inside one sample and dividing removes most of it.
+    """
+    if call_seconds <= 0:
+        return MAX_CALLS_PER_SAMPLE
+    needed = math.ceil(MIN_SAMPLE_SECONDS / call_seconds - 1e-9)
+    return min(max(needed, 1), MAX_CALLS_PER_SAMPLE)
+
+
+def _timed_repeated(call: Callable[[], Any], calls: int) -> tuple[Any, float, float]:
+    """Return the last result and the total wall and CPU seconds of all calls."""
+    wall_start = time.perf_counter()
+    cpu_start = time.process_time()
+    value = None
+    for _ in range(calls):
+        value = call()
+    cpu = time.process_time() - cpu_start
+    wall = time.perf_counter() - wall_start
+    return value, wall, cpu
 
 
 def _timed(call: Callable[[], Any]) -> tuple[Any, float, float]:

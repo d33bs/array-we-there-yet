@@ -17,8 +17,26 @@ RESULTS_END = "<!-- array-we-there-yet-results:end -->"
 SETUP_START = "<!-- array-we-there-yet-setup:start -->"
 SETUP_END = "<!-- array-we-there-yet-setup:end -->"
 SIMILAR_LOW = 0.9
+NOISY_RANGE = 0.5
+ACCESS_PATH_LIMIT = 3
 SIMILAR_HIGH = 1.1
 RAW_FLOAT32_BYTES = 4
+EXAMPLE_DATASET_GB = 1.5
+EXAMPLE_DOWNLOAD_MB_PER_SECOND = 100
+EXAMPLE_EGRESS_DOLLARS_PER_GB = 0.09
+EXAMPLE_USES = 1_000
+EXAMPLE_LAYOUTS = [
+    ("csv", "wide", "default"),
+    ("csv", "wide", "compact"),
+    ("parquet", "wide", "default"),
+    ("parquet", "fixed_array", "default"),
+    ("parquet", "fixed_array", "compact"),
+    ("duckdb", "duckdb_array", "default"),
+    ("zarr", "zarr_matrix", "default"),
+    ("tiledb", "tiledb_dense", "default"),
+    ("vortex", "fixed_array", "default"),
+    ("lance", "fixed_array", "default"),
+]
 THREAD_LABELS = {
     "arrow_cpu_threads": "Arrow CPU",
     "arrow_io_threads": "Arrow I/O",
@@ -58,35 +76,14 @@ BACKEND_DISPLAY_NAMES = {
     "vortex": "Vortex",
     "lance": "Lance",
 }
-BACKEND_ACCESS_NOTES = {
-    "csv": (
-        "`pandas` CSV I/O",
-        "Text parsing and packed-array decoding can add Python and pandas cost.",
-    ),
-    "parquet": (
-        "`pyarrow.parquet`",
-        "Compiled Arrow readers can reduce Python overhead for column and array reads.",
-    ),
-    "duckdb": (
-        "`duckdb` Python package",
-        "DuckDB runs queries in its native engine before results return to Python.",
-    ),
-    "zarr": (
-        "`zarr` Python package",
-        "Chunked array reads can favor matrix-shaped access patterns.",
-    ),
-    "tiledb": (
-        "`tiledb` Python package",
-        "TileDB native I/O is included through the Python binding.",
-    ),
-    "vortex": (
-        "`vortex-data` (`vortex` import)",
-        "Vortex reads and Arrow conversion both count in these timings.",
-    ),
-    "lance": (
-        "`lance` Python package",
-        "Lance scans and Arrow table conversion both count in these timings.",
-    ),
+BACKEND_PACKAGES = {
+    "csv": "`pandas` CSV I/O",
+    "parquet": "`pyarrow.parquet`",
+    "duckdb": "`duckdb` Python package",
+    "zarr": "`zarr` Python package",
+    "tiledb": "`tiledb` Python package",
+    "vortex": "`vortex-data` (`vortex` import)",
+    "lance": "`lance` Python package",
 }
 LAYOUT_COLORS = {
     "wide": "#4D4D4D",
@@ -658,7 +655,7 @@ def sensitivity_table_markdown(table: pd.DataFrame) -> str:
                 else f"{_change_text(default)} → {_change_text(compact)}"
             )
         backend = BACKEND_DISPLAY_NAMES.get(row["backend"], row["backend"])
-        conclusion = "Same direction" if row["holds"] else "Reverses"
+        conclusion = "Same side of wide" if row["holds"] else "Reverses"
         lines.append(
             f"| {backend} | `{row['layout']}` | "
             + " | ".join(cells)
@@ -938,8 +935,8 @@ def _ordered_backends(backends: Iterable[object]) -> list[str]:
 def access_path_table(summary: pd.DataFrame) -> str:
     """Return a Markdown table for package and binding access paths."""
     lines = [
-        "| Backend | Package or binding | Layouts measured | Impact on timing |",
-        "| ------- | ------------------ | ---------------- | ---------------- |",
+        "| Backend | Package or binding | Layouts measured |",
+        "| ------- | ------------------ | ---------------- |",
     ]
     for backend in _ordered_backends(summary["backend"].unique()):
         backend_rows = summary[summary["backend"] == backend]
@@ -947,12 +944,9 @@ def access_path_table(summary: pd.DataFrame) -> str:
             f"`{layout}`"
             for layout in _ordered_layouts(backend_rows["layout"].unique())
         )
-        package, impact = BACKEND_ACCESS_NOTES.get(
-            backend,
-            ("Unknown", "Package and binding cost are included in these timings."),
-        )
+        package = BACKEND_PACKAGES.get(backend, "Unknown")
         display_backend = BACKEND_DISPLAY_NAMES.get(backend, backend)
-        lines.append(f"| {display_backend} | {package} | {layouts} | {impact} |")
+        lines.append(f"| {display_backend} | {package} | {layouts} |")
     return "\n".join(lines)
 
 
@@ -1170,13 +1164,14 @@ def _value_for_dimension(
     return float(values.iloc[0])
 
 
-def update_readme(
+def update_readme(  # noqa: PLR0913
     *,
     readme_path: Path,
     summary: pd.DataFrame,
     figure_paths: list[Path],
     environment: dict[str, Any] | None = None,
     encodings: pd.DataFrame | None = None,
+    floor: pd.DataFrame | None = None,
 ) -> None:
     """Insert the latest benchmark results and setup into the README.
 
@@ -1188,6 +1183,7 @@ def update_readme(
         summary=summary,
         figure_paths=figure_paths,
         encodings=encodings,
+        floor=floor,
     )
     text = _replace_block(text, RESULTS_START, RESULTS_END, results, append=True)
     setup = "\n".join(render_setup_section(summary, environment))
@@ -1217,6 +1213,7 @@ def render_results_section(
     summary: pd.DataFrame,
     figure_paths: list[Path],
     encodings: pd.DataFrame | None = None,
+    floor: pd.DataFrame | None = None,
 ) -> str:
     """Render the Markdown summary and results for the README."""
     all_profiles = summary
@@ -1224,6 +1221,7 @@ def render_results_section(
     max_dimension = int(summary["dimensions"].max())
     lines = [
         *summary_section(all_profiles),
+        *_blank_before(real_world_section(all_profiles)),
         "",
         "## Results",
         "",
@@ -1234,12 +1232,16 @@ def render_results_section(
         (
             "Each cell compares the array-like layout with the wide layout of the "
             f"same backend at {max_dimension:,} features. Negative percentages and "
-            '"lower" mean faster or smaller.'
+            '"lower" mean faster or smaller. '
+            f"{_feature_projection_note(summary, max_dimension)}"
         ),
         "",
         array_vs_wide_markdown(array_vs_wide_table(summary)),
+        *_optional_paragraph(_noise_note(summary)),
         *_optional_paragraph(_parallelism_note(summary)),
         *_optional_paragraph(_cpu_time_note(summary)),
+        *_optional_paragraph(_access_path_note(summary)),
+        *_blank_before(floor_section(all_profiles, floor)),
         "",
         "### How to read the figures",
         "",
@@ -1304,9 +1306,8 @@ def render_results_section(
         )
         if filename == "combined_facet_overview.png":
             lines.extend(["", REFERENCE_NOTE])
-        if filename == "backend_wide_facet_overview.png":
-            lines.extend(_encoding_lines(all_profiles, encodings))
 
+    lines.extend(_encoding_lines(all_profiles, encodings))
     lines.extend(
         _appendix_lines(
             all_profiles,
@@ -1381,6 +1382,21 @@ def array_vs_wide_table(summary: pd.DataFrame) -> pd.DataFrame:
             values = rows[rows["operation"] == operation][column]
             return float(values.iloc[0]) if not values.empty else float("nan")
 
+        def noisy(operation: str, rows: pd.DataFrame = group) -> bool:
+            match = rows[rows["operation"] == operation]
+            if match.empty:
+                return False
+            row = match.iloc[0]
+            return _varies(
+                row["median_seconds"], row["q25_seconds"], row["q75_seconds"]
+            ) or (
+                _varies(
+                    row["wide_median_seconds"],
+                    row["wide_q25_seconds"],
+                    row["wide_q75_seconds"],
+                )
+            )
+
         rows.append(
             {
                 "backend": backend,
@@ -1390,6 +1406,10 @@ def array_vs_wide_table(summary: pd.DataFrame) -> pd.DataFrame:
                 "feature_projection": ratio("feature_projection", "time_ratio"),
                 "write": ratio("write", "time_ratio"),
                 "storage_size": ratio("write", "artifact_size_ratio"),
+                "matrix_materialization_noisy": noisy("matrix_materialization"),
+                "feature_projection_noisy": noisy("feature_projection"),
+                "write_noisy": noisy("write"),
+                "storage_size_noisy": False,
             }
         )
     return pd.DataFrame(rows)
@@ -1405,7 +1425,9 @@ def array_vs_wide_markdown(table: pd.DataFrame) -> str:
     ]
     for row in table.to_dict("records"):
         cells = [
-            "n/a" if np.isnan(row[name]) else _change_text(row[name])
+            "n/a"
+            if np.isnan(row[name])
+            else _change_text(row[name]) + ("*" if row.get(f"{name}_noisy") else "")
             for name in [
                 "matrix_materialization",
                 "feature_projection",
@@ -1430,6 +1452,17 @@ def _backend_ratios(table: pd.DataFrame, column: str) -> dict[str, float]:
 
 def _named(backend: str) -> str:
     return BACKEND_DISPLAY_NAMES.get(backend, backend)
+
+
+def _feature_projection_note(summary: pd.DataFrame, dimensions: int) -> str:
+    """Say that feature projection is the best case for a wide layout."""
+    count = _feature_count_text(summary).split()[0]
+    if not count.isdigit():
+        return ""
+    return (
+        f"Feature projection reads {count} of {dimensions:,} features, "
+        "which is the best case for a wide layout."
+    )
 
 
 def _feature_count_text(summary: pd.DataFrame) -> str:
@@ -1666,8 +1699,9 @@ def _encoding_lines(
                     "under both write profiles. Each cell shows the array-like "
                     "layout relative to the wide layout of the same backend, first "
                     "with the default profile and then with the compact profile. "
-                    "The last column says whether every measure keeps its "
-                    "direction, better or worse than wide, in both profiles."
+                    "The last column says whether every measure stays on the same "
+                    "side of wide, better or worse, in both profiles. This does "
+                    "not mean that the size of the effect stays the same."
                 ),
                 "",
                 sensitivity_table_markdown(sensitivity),
@@ -1754,6 +1788,10 @@ def environment_table(environment: dict[str, Any]) -> str:
     ]
     if environment.get("git_commit"):
         rows.append(("Code version", f"`{environment['git_commit']}`"))
+    if environment.get("runs", 1) > 1:
+        rows.append(
+            ("Runs", f"{environment['runs']} independent runs of the same code, pooled")
+        )
     for package, version in environment.get("packages", {}).items():
         text = ".".join(map(str, version)) if isinstance(version, list) else version
         rows.append((f"`{package}`", text))
@@ -1819,6 +1857,332 @@ def _parallelism_note(summary: pd.DataFrame) -> str | None:
         "thread. The benchmark cannot limit the native thread pools of Lance and "
         "Vortex."
     )
+
+
+def _short_time(seconds: float) -> str:
+    """Format seconds, using milliseconds below one second."""
+    if seconds < 1:
+        return f"{_two_digits(seconds * 1000)} ms"
+    return _duration(seconds)
+
+
+def floor_table(summary: pd.DataFrame, floor: pd.DataFrame | None) -> pd.DataFrame:
+    """Divide each layout's time by the time of a plain NumPy file."""
+    if floor is None or floor.empty:
+        return pd.DataFrame()
+    summary = default_profile(summary)
+    largest = summary["dimensions"].max()
+    floor_top = floor[floor["dimensions"] == largest].set_index("operation")
+    top = summary[summary["dimensions"] == largest]
+    operations = ["matrix_materialization", "random_rows", "feature_projection"]
+    if not set(operations).issubset(floor_top.index):
+        return pd.DataFrame()
+    rows = []
+    for (backend, layout), group in _ordered_groups(top):
+        row: dict[str, Any] = {"backend": backend, "layout": layout}
+        for operation in operations:
+            seconds = group[group["operation"] == operation]["median_seconds"]
+            row[operation] = (
+                float(seconds.iloc[0])
+                / float(floor_top.loc[operation, "median_seconds"])
+                if not seconds.empty
+                else float("nan")
+            )
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def floor_section(summary: pd.DataFrame, floor: pd.DataFrame | None) -> list[str]:
+    """Return the section that compares every layout with a plain NumPy file."""
+    table = floor_table(summary, floor)
+    if table.empty or floor is None:
+        return []
+    largest = default_profile(summary)["dimensions"].max()
+    matrix = floor[
+        (floor["dimensions"] == largest)
+        & (floor["operation"] == "matrix_materialization")
+    ]["median_seconds"].iloc[0]
+    lines = [
+        "| Layout | Matrix materialization | Random rows | Feature projection |",
+        "| ------ | ---------------------- | ----------- | ------------------ |",
+    ]
+    for row in table.to_dict("records"):
+        cells = [
+            "n/a" if np.isnan(row[name]) else f"{_multiplier(row[name])}x"
+            for name in ["matrix_materialization", "random_rows", "feature_projection"]
+        ]
+        lines.append(
+            f"| {_layout_name(row['backend'], row['layout'])} | "
+            + " | ".join(cells)
+            + " |"
+        )
+    return [
+        "### Distance from a plain NumPy file",
+        "",
+        (
+            f"A NumPy `.npy` file loads into memory in {_short_time(float(matrix))} "
+            f"at {int(largest):,} features. This is the floor, because no format "
+            "can be faster than a memory copy. Each cell divides the time of a "
+            "layout by the time of the floor, so 1x is as fast as the floor."
+        ),
+        "",
+        *lines,
+    ]
+
+
+def _varies(median: float, q25: float, q75: float) -> bool:
+    """Return whether the q25-to-q75 range is more than half of the median."""
+    return bool((q75 - q25) > NOISY_RANGE * median)
+
+
+def _noise_note(summary: pd.DataFrame) -> str | None:
+    """Explain the asterisk and count the measurements that vary a lot."""
+    if "noisy" not in summary.columns:
+        return None
+    default = default_profile(summary)
+    count = int(default["noisy"].sum())
+    if count == 0:
+        return None
+    share = round(100 * count / len(default))
+    return (
+        "* marks a cell whose measurement varies by more than half of its median. "
+        f"{count} of {len(default)} measurements ({share}%) vary this much."
+    )
+
+
+def _access_path_note(summary: pd.DataFrame) -> str | None:
+    """Check that no layout reads far more than its operation needs.
+
+    Matrix materialization should cost about as much as a full read, and random
+    rows should cost no more than matrix materialization. A layout far outside
+    this range points to a reader that asks the library for too much.
+    """
+    default = default_profile(summary)
+    top = default[default["dimensions"] == default["dimensions"].max()]
+    flags = []
+    checked = 0
+    for (backend, layout), group in _ordered_groups(top):
+        seconds = group.set_index("operation")["median_seconds"]
+        if not {"full_read", "matrix_materialization", "random_rows"}.issubset(
+            seconds.index
+        ):
+            continue
+        checked += 1
+        name = _layout_name(backend, layout)
+        matrix = seconds["matrix_materialization"] / seconds["full_read"]
+        rows = seconds["random_rows"] / seconds["matrix_materialization"]
+        if matrix > ACCESS_PATH_LIMIT:
+            flags.append(
+                f"{name}: matrix materialization takes {_multiplier(matrix)}x as "
+                "long as a full read."
+            )
+        if rows > ACCESS_PATH_LIMIT:
+            flags.append(
+                f"{name}: random rows take {_multiplier(rows)}x as long as matrix "
+                "materialization."
+            )
+    if not checked:
+        return None
+    if flags:
+        return "Access path check: these layouts are outside the range. " + " ".join(
+            flags
+        )
+    return (
+        "Access path check: for every layout, matrix materialization takes at most "
+        f"{ACCESS_PATH_LIMIT} times as long as a full read, and random rows take at "
+        f"most {ACCESS_PATH_LIMIT} times as long as matrix materialization."
+    )
+
+
+def _blank_before(lines: list[str]) -> list[str]:
+    """Return a blank line and the lines, or nothing when there are no lines."""
+    return ["", *lines] if lines else []
+
+
+def _two_digits(value: float) -> str:
+    """Format a number with two significant digits and no exponent."""
+    return f"{value:,.0f}" if value >= 100 else f"{value:.2g}"  # noqa: PLR2004
+
+
+def _duration(seconds: float) -> str:
+    """Format seconds as seconds, minutes, or hours."""
+    if seconds >= 3600:  # noqa: PLR2004
+        return f"{_two_digits(seconds / 3600)} h"
+    if seconds >= 60:  # noqa: PLR2004
+        return f"{_two_digits(seconds / 60)} min"
+    return f"{_two_digits(seconds)} s"
+
+
+def _dollars(amount: float) -> str:
+    """Format dollars with cents below ten dollars."""
+    return f"${amount:.2f}" if amount < 10 else f"${amount:,.0f}"  # noqa: PLR2004
+
+
+def real_world_table(summary: pd.DataFrame) -> pd.DataFrame:
+    """Scale the benchmark to a 1.5 GB CSV wide file.
+
+    Sizes scale by each layout's size relative to CSV wide. Read times scale
+    linearly with the size. Download time and egress cost follow from the size.
+    """
+    if "profile" not in summary.columns:
+        summary = summary.assign(profile="default")
+    top = summary[summary["dimensions"] == summary["dimensions"].max()]
+
+    def value(backend: str, layout: str, profile: str, operation: str, column: str):  # noqa: ANN202
+        match = top[
+            (top["backend"] == backend)
+            & (top["layout"] == layout)
+            & (top["profile"] == profile)
+            & (top["operation"] == operation)
+        ]
+        return float(match.iloc[0][column]) if not match.empty else None
+
+    baseline_bytes = value("csv", "wide", "default", "write", "artifact_bytes")
+    baseline_read = value(
+        "csv", "wide", "default", "matrix_materialization", "median_seconds"
+    )
+    if baseline_bytes is None or baseline_read is None:
+        return pd.DataFrame()
+    factor = EXAMPLE_DATASET_GB * 1e9 / baseline_bytes
+    rows_per_file = float(top.iloc[0]["rows"]) * factor
+
+    records = []
+    for backend, layout, profile in EXAMPLE_LAYOUTS:
+        size = value(backend, layout, profile, "write", "artifact_bytes")
+        read = value(
+            backend, layout, profile, "matrix_materialization", "median_seconds"
+        )
+        if size is None or read is None:
+            continue
+        size_gb = size / baseline_bytes * EXAMPLE_DATASET_GB
+        download = size_gb * 1000 / EXAMPLE_DOWNLOAD_MB_PER_SECOND
+        records.append(
+            {
+                "backend": backend,
+                "layout": layout,
+                "profile": profile,
+                "rows_per_file": rows_per_file,
+                "size_gb": size_gb,
+                "download_seconds": download,
+                "read_seconds": read * factor,
+                "total_seconds": download + read * factor,
+                "egress_dollars": size_gb * EXAMPLE_EGRESS_DOLLARS_PER_GB,
+            }
+        )
+    table = pd.DataFrame(records)
+    first = table.iloc[0]
+    table["time_saved_seconds"] = (
+        first["total_seconds"] - table["total_seconds"]
+    ) * EXAMPLE_USES
+    table["egress_saved_dollars"] = (
+        first["egress_dollars"] - table["egress_dollars"]
+    ) * EXAMPLE_USES
+    return table
+
+
+def _example_name(row: dict[str, Any]) -> str:
+    name = _layout_name(row["backend"], row["layout"])
+    return f"{name} (compact)" if row["profile"] == "compact" else name
+
+
+def _example_takeaway(records: list[dict[str, Any]]) -> str | None:
+    """Return one sentence on what Parquet's array layout saves, if it is present."""
+    baseline = records[0]
+    match = [
+        row
+        for row in records
+        if (row["backend"], row["layout"], row["profile"])
+        == ("parquet", "fixed_array", "default")
+    ]
+    if not match:
+        return None
+    row = match[0]
+    return (
+        f"**Takeaway.** With {_example_name(row)}, one use takes "
+        f"{_duration(row['total_seconds'])} instead of "
+        f"{_duration(baseline['total_seconds'])} and costs "
+        f"{_dollars(row['egress_dollars'])} instead of "
+        f"{_dollars(baseline['egress_dollars'])} in egress. Over {EXAMPLE_USES:,} "
+        f"uses that saves {_duration(row['time_saved_seconds'])} and "
+        f"{_dollars(row['egress_saved_dollars'])}."
+    )
+
+
+def real_world_section(summary: pd.DataFrame) -> list[str]:
+    """Return the real-world example: time and egress for a 1.5 GB CSV wide file."""
+    table = real_world_table(summary)
+    if table.empty:
+        return []
+    records = table.to_dict("records")
+    rows_text = f"{round(records[0]['rows_per_file'], -2):,.0f}"
+    features = int(summary["dimensions"].max())
+    one_use = [
+        "| Layout | Size | Download | Read into memory | Total time | Egress cost |",
+        "| ------ | ---- | -------- | ---------------- | ---------- | ----------- |",
+        *(
+            f"| {_example_name(row)} | {_two_digits(row['size_gb'])} GB "
+            f"| {_duration(row['download_seconds'])} "
+            f"| {_duration(row['read_seconds'])} "
+            f"| {_duration(row['total_seconds'])} "
+            f"| {_dollars(row['egress_dollars'])} |"
+            for row in records
+        ),
+    ]
+    savings = [
+        "| Layout | Time saved | Egress saved |",
+        "| ------ | ---------- | ------------ |",
+        *(
+            f"| {_example_name(row)} | {_duration(row['time_saved_seconds'])} "
+            f"| {_dollars(row['egress_saved_dollars'])} |"
+            for row in records[1:]
+        ),
+    ]
+    return [
+        "## Real-world example",
+        "",
+        (
+            "Egress is the fee that a cloud provider charges when data leaves its "
+            "network. This example asks what it costs to move and read a "
+            f"{EXAMPLE_DATASET_GB:g} GB CSV wide file, and how much the other "
+            f"layouts save. The file holds about {rows_text} rows of "
+            f"{features:,} features. A use is one download followed by one read "
+            "into memory."
+        ),
+        *_optional_paragraph(_example_takeaway(records)),
+        "",
+        "### One use",
+        "",
+        *one_use,
+        "",
+        f"### Savings over {EXAMPLE_USES:,} uses",
+        "",
+        (
+            f"Each cell compares a layout with CSV wide over {EXAMPLE_USES:,} uses. "
+            "Time saved is the sum of the download and read times."
+        ),
+        "",
+        *savings,
+        "",
+        "Assumptions:",
+        "",
+        f"- Download speed is {EXAMPLE_DOWNLOAD_MB_PER_SECOND} MB/s.",
+        (
+            f"- Egress costs ${EXAMPLE_EGRESS_DOLLARS_PER_GB:.2f} per GB. This is "
+            "the AWS list price for data transfer out to the internet, first 10 TB "
+            "each month ([AWS S3 pricing](https://aws.amazon.com/s3/pricing/)). "
+            "The first 100 GB each month is free on AWS. The table ignores this, "
+            "so it overstates the cost at low volume."
+        ),
+        (
+            "- Sizes and read times scale linearly from the benchmark data. The "
+            "benchmark does not measure files above 65 MB."
+        ),
+        (
+            "- Read times use one thread and warm caches, except for Lance and "
+            "Vortex. See Limitations."
+        ),
+        "- 1 GB is 1,000,000,000 bytes.",
+    ]
 
 
 def _cpu_time_note(summary: pd.DataFrame) -> str | None:
