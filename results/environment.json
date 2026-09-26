@@ -10,15 +10,16 @@
       8192
     ],
     "feature_projection_count": 8,
-    "figure_dir": "figures",
+    "figure_dir": "figures_a",
     "measured_repetitions": 3,
-    "output_dir": "results",
+    "output_dir": "results_a",
     "random_row_count": 128,
     "rows": 2000,
     "seed": 42,
     "threads": 1,
     "warmups": 1
   },
+  "git_commit": "80a73b6",
   "hardware": {
     "cpu_model": "Apple M4 Pro",
     "logical_cores": 12,
@@ -41,6 +42,7 @@
   "platform": "macOS-26.7-arm64-arm-64bit",
   "processor": "arm",
   "python": "3.11.13",
+  "runs": 2,
   "thread_limits": {
     "arrow_cpu_threads": 1,
     "arrow_io_threads": 1,
