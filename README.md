@@ -66,20 +66,21 @@ The streamed row is for a user who needs only 8 features. The other rows downloa
 
 ### Savings over 1,000 uses
 
-Each cell compares a layout with CSV wide over 1,000 uses. Time saved is the sum of the download and read times.
+Time spent and egress spent are the totals over 1,000 uses. Time saved and egress cost saved compare a layout with CSV wide. Time is the download plus the read.
 
-| Layout                               | Time saved | Egress saved |
-| ------------------------------------ | ---------- | ------------ |
-| CSV `wide` (compact)                 | 1.7 h      | $77          |
-| Parquet `wide`                       | 4.8 h      | $62          |
-| Parquet `fixed_array`                | 5.6 h      | $85          |
-| Parquet `fixed_array` (compact)      | 5.8 h      | $93          |
-| DuckDB `duckdb_array`                | 4.7 h      | $56          |
-| Zarr `zarr_matrix`                   | 5.7 h      | $89          |
-| TileDB `tiledb_dense`                | 5.6 h      | $84          |
-| Vortex `fixed_array`                 | 5.9 h      | $91          |
-| Lance `fixed_array`                  | 5.7 h      | $85          |
-| Parquet `wide` (8 features streamed) | 4.8 h      | $134         |
+| Layout                               | Time spent | Egress spent | Time saved | Egress cost saved |
+| ------------------------------------ | ---------- | ------------ | ---------- | ----------------- |
+| CSV `wide`                           | 7.2 h      | $135         | baseline   | baseline          |
+| CSV `wide` (compact)                 | 5.5 h      | $58          | 1.7 h      | $77               |
+| Parquet `wide`                       | 2.4 h      | $73          | 4.8 h      | $62               |
+| Parquet `fixed_array`                | 1.6 h      | $50          | 5.6 h      | $85               |
+| Parquet `fixed_array` (compact)      | 1.4 h      | $42          | 5.8 h      | $93               |
+| DuckDB `duckdb_array`                | 2.5 h      | $79          | 4.7 h      | $56               |
+| Zarr `zarr_matrix`                   | 1.5 h      | $46          | 5.7 h      | $89               |
+| TileDB `tiledb_dense`                | 1.6 h      | $51          | 5.6 h      | $84               |
+| Vortex `fixed_array`                 | 1.4 h      | $44          | 5.9 h      | $91               |
+| Lance `fixed_array`                  | 1.6 h      | $49          | 5.7 h      | $85               |
+| Parquet `wide` (8 features streamed) | 6.1 min    | $0.44        | 4.8 h      | $134              |
 
 The streamed row compares with CSV wide, which downloads the whole file and reads only 8 features.
 

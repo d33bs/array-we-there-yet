@@ -2463,6 +2463,18 @@ def _parquet_size_paragraph(records: list[dict[str, Any]]) -> str | None:
     return text
 
 
+def _savings_row(row: dict[str, Any], *, is_baseline: bool) -> str:
+    """Return one row of the savings table: totals, then the saving against CSV."""
+    spent_time = _duration(row["total_seconds"] * EXAMPLE_USES)
+    spent_egress = _dollars(row["egress_dollars"] * EXAMPLE_USES)
+    saved_time = "baseline" if is_baseline else _duration(row["time_saved_seconds"])
+    saved_egress = "baseline" if is_baseline else _dollars(row["egress_saved_dollars"])
+    return (
+        f"| {_example_name(row)} | {spent_time} | {spent_egress} "
+        f"| {saved_time} | {saved_egress} |"
+    )
+
+
 def _streamed_savings_note(records: list[dict[str, Any]]) -> str | None:
     """Explain what the streamed row is compared with in the savings table."""
     if not any(row.get("variant") == "streamed" for row in records):
@@ -2709,12 +2721,11 @@ def real_world_section(
         ),
     ]
     savings = [
-        "| Layout | Time saved | Egress saved |",
-        "| ------ | ---------- | ------------ |",
+        "| Layout | Time spent | Egress spent | Time saved | Egress cost saved |",
+        "| ------ | ---------- | ------------ | ---------- | ----------------- |",
         *(
-            f"| {_example_name(row)} | {_duration(row['time_saved_seconds'])} "
-            f"| {_dollars(row['egress_saved_dollars'])} |"
-            for row in records[1:]
+            _savings_row(row, is_baseline=index == 0)
+            for index, row in enumerate(records)
         ),
     ]
     return [
@@ -2770,8 +2781,9 @@ def real_world_section(
         f"### Savings over {EXAMPLE_USES:,} uses",
         "",
         (
-            f"Each cell compares a layout with CSV wide over {EXAMPLE_USES:,} uses. "
-            "Time saved is the sum of the download and read times."
+            f"Time spent and egress spent are the totals over {EXAMPLE_USES:,} uses. "
+            "Time saved and egress cost saved compare a layout with CSV wide. "
+            "Time is the download plus the read."
         ),
         "",
         *savings,

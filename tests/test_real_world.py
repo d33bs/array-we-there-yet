@@ -105,9 +105,14 @@ def test_real_world_section_shows_time_and_egress_for_each_layout() -> None:
     assert (
         "| Parquet `fixed_array` (compact) | 0.48 GB | 4.8 s | 0.56 s | 5.4 s | $0.04 |"
     ) in text
-    assert "| CSV `wide` (compact) | 1.9 h | $81 |" in text
-    assert "| Parquet `fixed_array` | 4.6 h | $81 |" in text
-    assert "| Parquet `fixed_array` (compact) | 4.9 h | $92 |" in text
+    assert (
+        "| Layout | Time spent | Egress spent | Time saved | Egress cost saved |"
+        in text
+    )
+    assert "| CSV `wide` | 6.4 h | $135 | baseline | baseline |" in text
+    assert "| CSV `wide` (compact) | 4.4 h | $54 | 1.9 h | $81 |" in text
+    assert "| Parquet `fixed_array` | 1.8 h | $54 | 4.6 h | $81 |" in text
+    assert "| Parquet `fixed_array` (compact) | 1.5 h | $43 | 4.9 h | $92 |" in text
 
 
 def test_real_world_section_opens_with_a_plain_takeaway() -> None:
@@ -288,7 +293,9 @@ def test_streamed_row_is_added_to_the_savings_table() -> None:
     """Streaming saves nearly the whole download and read for that user."""
     text = "\n".join(real_world_section(_summary_with_wide()))
 
-    assert "| Parquet `wide` (8 features streamed) | 5.3 h | $135 |" in text
+    assert (
+        "| Parquet `wide` (8 features streamed) | 1.1 min | $0.44 | 5.3 h | $135 |"
+    ) in text
 
 
 def test_streamed_row_is_explained_under_the_table() -> None:
@@ -334,7 +341,9 @@ def test_streamed_saving_falls_back_to_the_whole_read_without_csv_projection() -
 
     text = "\n".join(real_world_section(summary))
 
-    assert "| Parquet `wide` (8 features streamed) | 6.4 h | $135 |" in text
+    assert (
+        "| Parquet `wide` (8 features streamed) | 1.1 min | $0.44 | 6.4 h | $135 |"
+    ) in text
 
 
 def test_section_says_the_egress_cost_is_an_estimate_for_an_example() -> None:
@@ -373,3 +382,15 @@ def test_section_links_to_the_pricing_pages_of_several_providers() -> None:
         "egress charges. The host pays for storage and operations instead."
     ) in text
     assert "Check the current page before you plan a budget." in text
+
+
+def test_savings_table_explains_spent_and_saved() -> None:
+    """The text says which columns are totals and which are differences."""
+    text = "\n".join(real_world_section(_summary()))
+
+    assert (
+        "Time spent and egress spent are the totals over 1,000 uses. Time saved and "
+        "egress cost saved compare a layout with CSV wide. Time is the download plus "
+        "the read."
+    ) in text
+    assert "Egress saved" not in text
