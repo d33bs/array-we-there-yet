@@ -150,8 +150,7 @@ def test_summary_section_leads_with_the_main_finding_as_a_quote() -> None:
     assert quote == (
         "> **Main finding.** Array-like layouts read whole feature matrices 4x to "
         "1,000x faster than wide layouts in 2 of 3 backends. Reading only 8 "
-        "features gives mixed results: array-like layouts are faster in Lance "
-        "(10x), about the same in Parquet, and slower in CSV (5x)."
+        "features gives mixed results."
     )
     quote_position = 2
     assert lines.index(quote) == quote_position
@@ -436,7 +435,7 @@ def test_noise_note_counts_noisy_measurements() -> None:
     note = _noise_note(_noisy_story())
 
     assert note is not None
-    assert note.startswith("* marks a cell")
+    assert note.startswith("An asterisk (`*`) marks a cell")
     assert "2 of 84 measurements (2%)" in note
 
 

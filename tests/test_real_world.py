@@ -58,8 +58,8 @@ def test_duration_uses_two_significant_digits_and_the_right_unit() -> None:
 
 def test_dollars_show_cents_for_small_amounts_and_whole_dollars_for_large() -> None:
     """Amounts under ten dollars keep cents."""
-    assert _dollars(0.135) == "$0.14"
-    assert _dollars(0.054) == "$0.05"
+    assert _dollars(0.135) == "$0.135"
+    assert _dollars(0.054) == "$0.054"
     assert _dollars(81.0) == "$81"
     assert _dollars(1_234.0) == "$1,234"
 
@@ -99,11 +99,12 @@ def test_real_world_section_shows_time_and_egress_for_each_layout() -> None:
     text = "\n".join(real_world_section(_summary()))
 
     assert text.startswith("## Real-world example")
-    assert "| CSV `wide` | 1.5 GB | 15 s | 8 s | 23 s | $0.14 |" in text
-    assert "| CSV `wide` (compact) | 0.6 GB | 6 s | 10 s | 16 s | $0.05 |" in text
-    assert "| Parquet `fixed_array` | 0.6 GB | 6 s | 0.4 s | 6.4 s | $0.05 |" in text
+    assert "| CSV `wide` | 1.5 GB | 15 s | 8 s | 23 s | $0.135 |" in text
+    assert "| CSV `wide` (compact) | 0.6 GB | 6 s | 10 s | 16 s | $0.054 |" in text
+    assert "| Parquet `fixed_array` | 0.6 GB | 6 s | 0.4 s | 6.4 s | $0.054 |" in text
     assert (
-        "| Parquet `fixed_array` (compact) | 0.48 GB | 4.8 s | 0.56 s | 5.4 s | $0.04 |"
+        "| Parquet `fixed_array` (compact) | 0.48 GB | 4.8 s | 0.56 s | 5.4 s "
+        "| $0.043 |"
     ) in text
     assert (
         "| Layout | Time spent | Egress spent | Time saved | Egress cost saved |"
@@ -121,7 +122,7 @@ def test_real_world_section_opens_with_a_plain_takeaway() -> None:
 
     assert (
         "**Takeaway.** With Parquet `fixed_array`, one use takes 6.4 s instead of "
-        "23 s and costs $0.05 instead of $0.14 in egress. Over 1,000 uses that "
+        "23 s and costs $0.054 instead of $0.135 in egress. Over 1,000 uses that "
         "saves 4.6 h and $81."
     ) in text
     assert text.index("**Takeaway.**") < text.index("### One use")
@@ -153,13 +154,14 @@ def test_real_world_section_states_its_assumptions_and_sources() -> None:
 
 
 def test_results_section_puts_the_example_after_the_summary() -> None:
-    """The example comes after the summary and before the results."""
+    """The example comes after the summary and the plots, before the details."""
     section = render_results_section(summary=_summary(), figure_paths=[])
 
     assert (
         section.index("## Summary")
+        < section.index("## Plots")
         < section.index("## Real-world example")
-        < section.index("## Results")
+        < section.index("## Detailed results")
     )
 
 
@@ -276,7 +278,7 @@ def test_dollars_use_four_decimals_below_one_cent() -> None:
     """Tiny egress costs do not round to zero."""
     assert _dollars(0.000439) == "$0.0004"
     assert _dollars(0.0099) == "$0.0099"
-    assert _dollars(0.01) == "$0.01"
+    assert _dollars(0.01) == "$0.010"
 
 
 def test_streamed_row_is_added_to_the_one_use_table() -> None:
@@ -294,7 +296,7 @@ def test_streamed_row_is_added_to_the_savings_table() -> None:
     text = "\n".join(real_world_section(_summary_with_wide()))
 
     assert (
-        "| Parquet `wide` (8 features streamed) | 1.1 min | $0.44 | 5.3 h | $135 |"
+        "| Parquet `wide` (8 features streamed) | 1.1 min | $0.439 | 5.3 h | $135 |"
     ) in text
 
 
@@ -342,7 +344,7 @@ def test_streamed_saving_falls_back_to_the_whole_read_without_csv_projection() -
     text = "\n".join(real_world_section(summary))
 
     assert (
-        "| Parquet `wide` (8 features streamed) | 1.1 min | $0.44 | 6.4 h | $135 |"
+        "| Parquet `wide` (8 features streamed) | 1.1 min | $0.439 | 6.4 h | $135 |"
     ) in text
 
 

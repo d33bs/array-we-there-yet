@@ -7,7 +7,6 @@ import pytest
 
 from array_we_there_yet.report import (
     SERIES_COLORS,
-    _change_text,
     _direction_title,
     _errorbar_interval,
     _facet_grid_shape,
@@ -90,16 +89,17 @@ def test_results_section_has_a_professional_structure(tmp_path: Path) -> None:
     headings = [line for line in section.splitlines() if line.startswith("#")]
     assert headings == [
         "## Summary",
+        "## Plots",
+        "### How to read the figures",
+        "### Array-like layouts against their own wide layout",
+        "### Every layout against CSV wide",
+        "### Wide layouts",
         "## Real-world example",
         "### One use",
         "### Savings over 1,000 uses",
         "### Streaming a Parquet file",
-        "## Results",
+        "## Detailed results",
         "### Key findings",
-        "### How to read the figures",
-        "### Every layout against CSV wide",
-        "### Wide layouts",
-        "### Array-like layouts against their own wide layout",
     ]
     for filler in [
         "Primary facet plots",
@@ -126,7 +126,7 @@ def test_results_section_describes_the_run_and_findings(tmp_path: Path) -> None:
     section = render_results_section(summary=summary, figure_paths=paths)
 
     assert "synthetic data with 10 rows and 4 to 8 features" in section
-    assert "median of 1 repeated run" in section
+    assert "median of 1 repetition" in section
     assert "Geometric Mean Time is the geometric mean" in section
     assert "Median Time" not in section
     assert "compares the array-like layout with the wide layout of the same" in section
@@ -406,17 +406,17 @@ def test_parallelism_note_is_absent_for_single_threaded_runs() -> None:
 def test_results_section_places_the_parallelism_note_after_findings(
     tmp_path: Path,
 ) -> None:
-    """The note sits under Key findings, before the figure guide."""
+    """The note sits under Key findings, after the plots and the example."""
     summary = _figure_summary()
     summary["median_parallelism"] = 4.0
     paths = write_figures(summary, tmp_path)
 
     section = render_results_section(summary=summary, figure_paths=paths)
 
+    guide = section.index("### How to read the figures")
     findings = section.index("### Key findings")
     note = section.index("used more than one thread")
-    guide = section.index("### How to read the figures")
-    assert findings < note < guide
+    assert guide < findings < note
 
 
 def _all_operations_summary() -> pd.DataFrame:
@@ -573,22 +573,6 @@ def test_write_profile_figure_needs_compact_rows(tmp_path: Path) -> None:
     assert missing is None
 
 
-def test_change_text_uses_percentages_and_multipliers() -> None:
-    """Small changes read as signed percentages and large ones as multipliers."""
-    assert _change_text(0.5) == "-50%"
-    assert _change_text(1.5) == "+50%"
-    assert _change_text(4.0) == "4x higher"
-    assert _change_text(0.05) == "20x lower"
-    assert _change_text(0.0106) == "94x lower"
-    assert _change_text(0.0099) == "100x lower"
-    assert _change_text(1.0) == "0%"
-    assert _change_text(0.997) == "0%"
-    assert _change_text(1 / 5340) == "5,300x lower"
-    assert _change_text(1234.0) == "1,200x higher"
-    assert _change_text(4.38) == "4.4x higher"
-    assert _change_text(0.001) == "1,000x lower"
-
-
 def test_encoding_table_lists_each_profile_with_bytes_per_value() -> None:
     """The encodings table joins observed encodings to stored bytes per value."""
     summary = _profile_summary()
@@ -652,18 +636,19 @@ def test_results_section_puts_encoding_sensitivity_before_the_appendix(
     )
 
     headings = [line for line in section.splitlines() if line.startswith("### ")]
-    backend_wide = headings.index(
-        "### Array-like layouts against their own wide layout"
+    assert headings.index("### Key findings") < headings.index(
+        "### Encoding sensitivity"
     )
-    assert headings[backend_wide + 1] == "### Encoding sensitivity"
-    assert headings[backend_wide + 2] == "### Encodings observed"
+    assert headings.index("### Encoding sensitivity") + 1 == headings.index(
+        "### Encodings observed"
+    )
     assert "### Parquet tracking" not in headings
     assert headings[-1] == "### Appendix: storage size against time"
     assert "Encoding profiles" not in headings
     appendix = section[section.index("### Appendix: storage size against time") :]
     assert "synthetic" in appendix
     assert "not a ranking" in appendix
-    assert "| Parquet `fixed_array` | -50% | +50% | 4x higher |" in appendix
+    assert "| Parquet `fixed_array` | -50% | +50% | +300% |" in appendix
     assert "![Storage size against time" in appendix
     assert ".csv" not in section
     assert "| Parquet | `fixed_array` | compact | zstd | 3.12 |" in section

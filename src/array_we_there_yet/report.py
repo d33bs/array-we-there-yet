@@ -681,7 +681,7 @@ def sensitivity_table_markdown(table: pd.DataFrame) -> str:
             cells.append(
                 "n/a"
                 if np.isnan(default) or np.isnan(compact)
-                else f"{_change_text(default)} → {_change_text(compact)}"
+                else f"{_percent_change(default)} → {_percent_change(compact)}"
             )
         backend = BACKEND_DISPLAY_NAMES.get(row["backend"], row["backend"])
         conclusion = "Same side of wide" if row["holds"] else "Reverses"
@@ -691,16 +691,6 @@ def sensitivity_table_markdown(table: pd.DataFrame) -> str:
             + f" | {conclusion} |"
         )
     return "\n".join(lines)
-
-
-def _change_text(ratio: float) -> str:
-    """Return a signed percentage for small changes and a multiplier otherwise."""
-    if GAIN_MULTIPLIER_LIMIT < ratio < LOSS_MULTIPLIER_LIMIT:
-        percent = round((ratio - 1) * 100)
-        return "0%" if percent == 0 else f"{percent:+d}%"
-    if ratio <= GAIN_MULTIPLIER_LIMIT:
-        return f"{_multiplier(1 / ratio)}x lower"
-    return f"{_multiplier(ratio)}x higher"
 
 
 def _percent_change(ratio: float) -> str:
@@ -739,9 +729,9 @@ def profile_change_table(comparison: pd.DataFrame) -> str:
     for row in comparison.to_dict("records"):
         name = BACKEND_DISPLAY_NAMES.get(row["backend"], row["backend"])
         lines.append(
-            f"| {name} `{row['layout']}` | {_change_text(row['size_ratio'])} "
-            f"| {_change_text(row['matrix_materialization_ratio'])} "
-            f"| {_change_text(row['write_ratio'])} |"
+            f"| {name} `{row['layout']}` | {_percent_change(row['size_ratio'])} "
+            f"| {_percent_change(row['matrix_materialization_ratio'])} "
+            f"| {_percent_change(row['write_ratio'])} |"
         )
     return "\n".join(lines)
 
@@ -1266,33 +1256,17 @@ def render_results_section(  # noqa: PLR0913
     sweep: pd.DataFrame | None = None,
     scaling: pd.DataFrame | None = None,
 ) -> str:
-    """Render the Markdown summary and results for the README."""
+    """Render the summary, the plots, the real-world example, and the details."""
     all_profiles = summary
     summary = default_profile(summary)
     max_dimension = int(summary["dimensions"].max())
+    impact = real_world_bullet(all_profiles, scaling)
     lines = [
-        *summary_section(all_profiles),
-        *_blank_before(real_world_section(all_profiles, scaling)),
+        *summary_section(all_profiles, extra_bullets=[impact] if impact else None),
         "",
-        "## Results",
+        "## Plots",
         "",
         _run_description(summary),
-        "",
-        "### Key findings",
-        "",
-        (
-            "Each cell compares the array-like layout with the wide layout of the "
-            f"same backend at {max_dimension:,} features. A negative percentage "
-            "means faster or smaller. A positive percentage means slower or larger. "
-            f"{_feature_projection_note(summary, max_dimension)}"
-        ),
-        "",
-        array_vs_wide_markdown(array_vs_wide_table(summary)),
-        *_optional_paragraph(_noise_note(summary)),
-        *_optional_paragraph(_parallelism_note(summary)),
-        *_optional_paragraph(_cpu_time_note(summary)),
-        *_optional_paragraph(_access_path_note(summary)),
-        *_blank_before(floor_section(all_profiles, floor)),
         "",
         "### How to read the figures",
         "",
@@ -1307,7 +1281,7 @@ def render_results_section(  # noqa: PLR0913
             "across all operations. The geometric mean is the standard way "
             "to average ratios."
         ),
-        "- Error bars show the q25-to-q75 range across repeated runs.",
+        "- Error bars show the q25-to-q75 range across repetitions.",
         "- The y-axis uses a log scale to show small and large changes.",
         "- Dashed lines are wide layouts. Solid lines are array-like layouts.",
     ]
@@ -1316,13 +1290,23 @@ def render_results_section(  # noqa: PLR0913
     figure_number = 0
     for filename, heading, alt_text, caption in [
         (
+            "backend_wide_facet_overview.png",
+            "Array-like layouts against their own wide layout",
+            "Time and storage ratios for array-like layouts against wide layouts",
+            (
+                "Each array-like layout divided by the wide layout of the same "
+                "backend. Values below 1.0 favor the array-like layout. This is "
+                "the fairest comparison, because both layouts use the same format."
+            ),
+        ),
+        (
             "combined_facet_overview.png",
             "Every layout against CSV wide",
             "Time and storage ratios for every layout against CSV wide",
             (
                 "Every layout divided by CSV wide, which is the flat line at 1.0. "
-                "Parquet wide is the only other wide layout shown here. "
-                "Figure 2 shows all wide layouts."
+                "Parquet wide is the only other wide layout shown here. The "
+                "section Wide layouts shows all of them."
             ),
         ),
         (
@@ -1330,15 +1314,6 @@ def render_results_section(  # noqa: PLR0913
             "Wide layouts",
             "Time and storage ratios for wide layouts against CSV wide",
             ("Wide layouts only, divided by CSV wide, which is the flat line at 1.0."),
-        ),
-        (
-            "backend_wide_facet_overview.png",
-            "Array-like layouts against their own wide layout",
-            "Time and storage ratios for array-like layouts against wide layouts",
-            (
-                "Each array-like layout divided by the wide layout of the same "
-                "backend. Values below 1.0 favor the array-like layout."
-            ),
         ),
     ]:
         path = figures.get(filename)
@@ -1358,14 +1333,41 @@ def render_results_section(  # noqa: PLR0913
         if filename == "combined_facet_overview.png":
             lines.extend(["", REFERENCE_NOTE])
 
+    lines.extend(_blank_before(real_world_section(all_profiles, scaling)))
+    lines.extend(
+        [
+            "",
+            "## Detailed results",
+            "",
+            "### Key findings",
+            "",
+            (
+                "Each cell compares the array-like layout with the wide layout of "
+                f"the same backend at {max_dimension:,} features. A negative "
+                "percentage means faster or smaller. A positive percentage means "
+                "slower or larger. For example, +100% means twice as slow or twice "
+                "as large, and -50% means half the time or size. "
+                f"{_feature_projection_note(summary, max_dimension)}"
+            ),
+            "",
+            array_vs_wide_markdown(array_vs_wide_table(summary)),
+            *_optional_paragraph(_noise_note(summary)),
+            *_optional_paragraph(_parallelism_note(summary)),
+            *_optional_paragraph(_cpu_time_note(summary)),
+            *_optional_paragraph(_access_path_note(summary)),
+            *_blank_before(floor_section(all_profiles, floor)),
+        ]
+    )
+
     row_figure = figures.get("row_scaling.png")
-    if row_figure is not None and not row_scaling_table(sweep).empty:
+    has_sweep = not row_scaling_table(sweep).empty
+    if row_figure is not None and has_sweep:
         figure_number += 1
     lines.extend(
         _blank_before(
             row_scaling_section(
                 sweep,
-                row_figure if not row_scaling_table(sweep).empty else None,
+                row_figure if has_sweep else None,
                 figure_number,
             )
         )
@@ -1384,8 +1386,8 @@ def render_results_section(  # noqa: PLR0913
 REFERENCE_NOTE = (
     "CSV wide is the reference because it is the most common way to share this "
     "kind of data. It is a text format, so ratios against it exaggerate the gain "
-    "of any binary format. Figure 3 is the fairer comparison: each array-like "
-    "layout against a wide layout in the same format."
+    "of any binary format. The figure before this one is the fairer comparison: "
+    "each array-like layout against a wide layout in the same format."
 )
 
 
@@ -1517,6 +1519,29 @@ def _named(backend: str) -> str:
     return BACKEND_DISPLAY_NAMES.get(backend, backend)
 
 
+def real_world_bullet(
+    summary: pd.DataFrame,
+    scaling: pd.DataFrame | None = None,
+) -> str | None:
+    """Return one summary bullet with the real-world time and egress result."""
+    table = real_world_table(summary, scaling)
+    if table.empty:
+        return None
+    records = table.to_dict("records")
+    row = _record(records, "fixed_array")
+    if row is None:
+        return None
+    baseline = records[0]
+    return (
+        f"- **Real-world impact.** For a {EXAMPLE_DATASET_GB:g} GB CSV wide file, "
+        f"{_layout_name('parquet', 'fixed_array')} takes "
+        f"{_duration(row['total_seconds'])} per use instead of "
+        f"{_duration(baseline['total_seconds'])} and costs "
+        f"{_dollars(row['egress_dollars'])} instead of "
+        f"{_dollars(baseline['egress_dollars'])} in egress. See Real-world example."
+    )
+
+
 def _feature_projection_note(summary: pd.DataFrame, dimensions: int) -> str:
     """Say that feature projection is the best case for a wide layout."""
     count = _feature_count_text(summary).split()[0]
@@ -1537,7 +1562,10 @@ def _feature_count_text(summary: pd.DataFrame) -> str:
     return f"{digits[0]} features" if digits else "a few features"
 
 
-def summary_section(summary: pd.DataFrame) -> list[str]:
+def summary_section(
+    summary: pd.DataFrame,
+    extra_bullets: list[str] | None = None,
+) -> list[str]:
     """Return the summary: one main finding as a quote, then concrete bullets."""
     all_profiles = summary
     summary = default_profile(summary)
@@ -1565,6 +1593,7 @@ def summary_section(summary: pd.DataFrame) -> list[str]:
         for bullet in [
             _text_packing_bullet(summary),
             _encoding_bullet(all_profiles),
+            *(extra_bullets or []),
         ]
         if bullet
     )
@@ -1611,13 +1640,9 @@ def _main_finding(
     if not groups:
         return text
     parts = [f"{name} in {_join_words(items)}" for name, items in groups.items()]
-    joined = _join_words(parts)
     if len(parts) > 1:
-        return (
-            f"{text} Reading only {features} gives mixed results: array-like "
-            f"layouts are {joined}."
-        )
-    return f"{text} Reading only {features}, array-like layouts are {joined}."
+        return f"{text} Reading only {features} gives mixed results."
+    return f"{text} Reading only {features}, array-like layouts are {parts[0]}."
 
 
 def _matrix_bullet(
@@ -1784,7 +1809,9 @@ def _encoding_lines(
                     "between the binary formats come from default compression "
                     "and encoding choices, not from the layout. Random values "
                     "compress poorly, so the sizes describe this data set and "
-                    "not real profile data."
+                    "not real profile data. "
+                    f"Sizes are for {int(summary['rows'].max()):,} rows and can "
+                    "change with more rows."
                 ),
                 *_optional_paragraph(encoding_findings(summary)),
                 "",
@@ -2011,7 +2038,8 @@ def _noise_note(summary: pd.DataFrame) -> str | None:
         return None
     share = round(100 * count / len(default))
     return (
-        "* marks a cell whose measurement varies by more than half of its median. "
+        "An asterisk (`*`) marks a cell whose measurement varies by more than half "
+        "of its median. "
         f"{count} of {len(default)} measurements ({share}%) vary this much."
     )
 
@@ -2268,9 +2296,15 @@ def _duration(seconds: float) -> str:
 
 
 def _dollars(amount: float) -> str:
-    """Format dollars: four decimals below a cent, cents below ten dollars."""
+    """Format dollars so that a per-use cost times the uses matches the total.
+
+    Amounts under a cent keep four decimals, under a dollar three decimals, and
+    under ten dollars cents.
+    """
     if amount < 0.01:  # noqa: PLR2004
         return f"${amount:.4f}"
+    if amount < 1:
+        return f"${amount:.3f}"
     return f"${amount:.2f}" if amount < 10 else f"${amount:,.0f}"  # noqa: PLR2004
 
 
@@ -2498,6 +2532,16 @@ def _streamed_savings_note(records: list[dict[str, Any]]) -> str | None:
     return (
         "The streamed row compares with CSV wide, which downloads the whole file "
         f"and reads only {EXAMPLE_STREAM_FEATURES} features."
+    )
+
+
+def _compact_note(records: list[dict[str, Any]]) -> str | None:
+    """Explain the compact rows where the reader first meets them."""
+    if not any(row["profile"] == "compact" for row in records):
+        return None
+    return (
+        "Compact rows use the compact write profile, which writes smaller files "
+        "and can cost time. See Write settings."
     )
 
 
@@ -2793,6 +2837,7 @@ def real_world_section(
         "",
         *one_use,
         *_optional_paragraph(_streamed_note(records)),
+        *_optional_paragraph(_compact_note(records)),
         "",
         f"### Savings over {EXAMPLE_USES:,} uses",
         "",
@@ -2883,11 +2928,11 @@ def _run_description(summary: pd.DataFrame) -> str:
     smallest = int(summary["dimensions"].min())
     largest = int(summary["dimensions"].max())
     repetitions = int(summary["repetitions"].max())
-    unit = "run" if repetitions == 1 else "runs"
+    unit = "repetition" if repetitions == 1 else "repetitions"
     return (
         f"The benchmark used synthetic data with {rows:,} rows and "
         f"{smallest:,} to {largest:,} features. "
-        f"Each timing is the median of {repetitions} repeated {unit}."
+        f"Each timing is the median of {repetitions} {unit}."
     )
 
 
