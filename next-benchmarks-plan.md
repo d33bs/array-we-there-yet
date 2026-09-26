@@ -25,15 +25,15 @@ They were mostly write timings and timings of a few milliseconds.
 
 Updated after the runs at commit `837ce54`.
 
-| Phase                        | Status      | What is left                                                                                    |
-| ---------------------------- | ----------- | ----------------------------------------------------------------------------------------------- |
-| 0: run the fixed code        | Done        | None. Two runs of commit `80a73b6`. The Lance wide numbers are now correct.                      |
-| 1: statistics                | Mostly done | The runs are pooled to 6 repetitions. Reads repeat inside each sample. TileDB writes stay noisy. |
-| 2: access path checks        | Done        | An automatic check passes for every layout. Mixed retrieval uses native row selection.           |
-| 3: scale and cache           | Partly done | The row sweep and a real 1.5 GB scaling check are done. Cold-cache runs are not.                 |
-| 4: real data                 | Not started | Needs a dataset choice and a license check.                                                      |
-| 5: baselines and outside review | Partly done | The plain NumPy file is done. More encoding profiles and maintainer reviews are not.          |
-| 6: README and reporting      | Done        | The README has a summary, a real-world example, and the review fixes.                            |
+| Phase                           | Status      | What is left                                                                                     |
+| ------------------------------- | ----------- | ------------------------------------------------------------------------------------------------ |
+| 0: run the fixed code           | Done        | None. Two runs of commit `80a73b6`. The Lance wide numbers are now correct.                      |
+| 1: statistics                   | Mostly done | The runs are pooled to 6 repetitions. Reads repeat inside each sample. TileDB writes stay noisy. |
+| 2: access path checks           | Done        | An automatic check passes for every layout. Mixed retrieval uses native row selection.           |
+| 3: scale and cache              | Partly done | The row sweep and a real 1.5 GB scaling check are done. Cold-cache runs are not.                 |
+| 4: real data                    | Not started | Needs a dataset choice and a license check.                                                      |
+| 5: baselines and outside review | Partly done | The plain NumPy file is done. More encoding profiles and maintainer reviews are not.             |
+| 6: README and reporting         | Done        | The README has a summary, a real-world example, and the review fixes.                            |
 
 **What the runs found**
 
