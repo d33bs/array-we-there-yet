@@ -703,6 +703,22 @@ def _change_text(ratio: float) -> str:
     return f"{_multiplier(ratio)}x higher"
 
 
+def _percent_change(ratio: float) -> str:
+    """Return a signed percentage, and never a multiplier.
+
+    Large increases keep two significant digits. Almost total reductions keep
+    decimals, because -99.98% must not read as -100%.
+    """
+    percent = (ratio - 1) * 100
+    if abs(percent) < 0.5:  # noqa: PLR2004
+        return "0%"
+    if percent <= -99.5:  # noqa: PLR2004
+        return f"{percent:.2f}".rstrip("0").rstrip(".") + "%"
+    if abs(percent) >= 100:  # noqa: PLR2004
+        return f"{float(f'{percent:.2g}'):+,.0f}%"
+    return f"{round(percent):+d}%"
+
+
 def _multiplier(value: float) -> str:
     """Format a multiplier with two significant digits and no exponent.
 
@@ -1266,8 +1282,8 @@ def render_results_section(  # noqa: PLR0913
         "",
         (
             "Each cell compares the array-like layout with the wide layout of the "
-            f"same backend at {max_dimension:,} features. Negative percentages and "
-            '"lower" mean faster or smaller. '
+            f"same backend at {max_dimension:,} features. A negative percentage "
+            "means faster or smaller. A positive percentage means slower or larger. "
             f"{_feature_projection_note(summary, max_dimension)}"
         ),
         "",
@@ -1474,7 +1490,7 @@ def array_vs_wide_markdown(table: pd.DataFrame) -> str:
         cells = [
             "n/a"
             if np.isnan(row[name])
-            else _change_text(row[name]) + ("*" if row.get(f"{name}_noisy") else "")
+            else _percent_change(row[name]) + ("*" if row.get(f"{name}_noisy") else "")
             for name in [
                 "matrix_materialization",
                 "feature_projection",

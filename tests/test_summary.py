@@ -13,6 +13,7 @@ from array_we_there_yet.report import (
     _access_path_note,
     _cpu_time_note,
     _noise_note,
+    _percent_change,
     array_vs_wide_markdown,
     array_vs_wide_table,
     encoding_findings,
@@ -135,11 +136,9 @@ def test_array_vs_wide_markdown_reads_in_percentages_and_multipliers() -> None:
         "| Backend | Layout | Matrix materialization | Feature projection "
         "| Write | Storage size |"
     ) in markdown
-    assert (
-        "| Lance | `fixed_array` | 1,000x lower | 10x lower | 0% | -10% |" in markdown
-    )
+    assert "| Lance | `fixed_array` | -99.9% | -90% | 0% | -10% |" in markdown
     assert "| Parquet | `fixed_array` | -75% | -5% | -50% | -30% |" in markdown
-    assert "| CSV | `delimited_array` | +50% | 5x higher | +40% | +10% |" in markdown
+    assert "| CSV | `delimited_array` | +50% | +400% | +40% | +10% |" in markdown
 
 
 def test_summary_section_leads_with_the_main_finding_as_a_quote() -> None:
@@ -428,9 +427,7 @@ def test_key_findings_mark_cells_whose_measurement_is_noisy() -> None:
     """A cell built from a noisy measurement gets an asterisk."""
     markdown = array_vs_wide_markdown(array_vs_wide_table(_noisy_story()))
 
-    assert (
-        "| Lance | `fixed_array` | 1,000x lower* | 10x lower | 0% | -10% |" in markdown
-    )
+    assert "| Lance | `fixed_array` | -99.9%* | -90% | 0% | -10% |" in markdown
     assert "| Parquet | `fixed_array` | -75% | -5% | -50% | -30% |" in markdown
 
 
@@ -509,3 +506,38 @@ def test_sensitivity_table_says_what_the_conclusion_column_means() -> None:
     assert "Same side of wide" in section or "Reverses" in section
     assert "Same direction" not in section
     assert "does not mean that the size of the effect stays the same" in section
+
+
+def test_percent_change_is_always_a_signed_percentage() -> None:
+    """Every value is a percentage with a sign, never a multiplier."""
+    assert _percent_change(1.0) == "0%"
+    assert _percent_change(1.004) == "0%"
+    assert _percent_change(0.5) == "-50%"
+    assert _percent_change(0.9) == "-10%"
+    assert _percent_change(1.3) == "+30%"
+    assert _percent_change(1.5) == "+50%"
+
+
+def test_percent_change_rounds_large_increases_to_two_significant_digits() -> None:
+    """A fivefold increase is +400%, and a 17-fold increase is +1,600%."""
+    assert _percent_change(5.0) == "+400%"
+    assert _percent_change(5.19) == "+420%"
+    assert _percent_change(17.4) == "+1,600%"
+    assert _percent_change(6.21) == "+520%"
+
+
+def test_percent_change_keeps_decimals_for_almost_total_reductions() -> None:
+    """A reduction of 99.98% must not round to 100%, which would read as zero."""
+    assert _percent_change(0.001) == "-99.9%"
+    assert _percent_change(0.0102) == "-99%"
+    assert _percent_change(1 / 5400) == "-99.98%"
+    assert _percent_change(0.99999) == "0%"
+
+
+def test_key_findings_intro_explains_the_signs() -> None:
+    """The intro says what a negative and a positive percentage mean."""
+    section = render_results_section(summary=_story_summary(), figure_paths=[])
+
+    assert "A negative percentage means faster or smaller." in section
+    assert "A positive percentage means slower or larger." in section
+    assert '"lower" mean' not in section

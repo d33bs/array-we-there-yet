@@ -140,18 +140,18 @@ The benchmark used synthetic data with 2,000 rows and 256 to 8,192 features. Eac
 
 ### Key findings
 
-Each cell compares the array-like layout with the wide layout of the same backend at 8,192 features. Negative percentages and "lower" mean faster or smaller. Feature projection reads 8 of 8,192 features, which is the best case for a wide layout.
+Each cell compares the array-like layout with the wide layout of the same backend at 8,192 features. A negative percentage means faster or smaller. A positive percentage means slower or larger. Feature projection reads 8 of 8,192 features, which is the best case for a wide layout.
 
-| Backend | Layout            | Matrix materialization | Feature projection | Write          | Storage size |
-| ------- | ----------------- | ---------------------- | ------------------ | -------------- | ------------ |
-| CSV     | `delimited_array` | +30%                   | 5.2x higher        | +39%           | +11%         |
-| CSV     | `json_array`      | +51%                   | 6x higher          | +41%           | +11%         |
-| Parquet | `fixed_array`     | -76%                   | -1%                | -88%           | -29%         |
-| DuckDB  | `duckdb_array`    | -86%                   | -52%               | -35%           | -57%         |
-| Zarr    | `zarr_matrix`     | 99x lower              | 17x higher         | 170x lower\*   | -10%         |
-| TileDB  | `tiledb_dense`    | 230x lower             | +12%               | 5,400x lower\* | -11%         |
-| Vortex  | `fixed_array`     | 36x lower              | 27x lower          | 40x lower      | -14%         |
-| Lance   | `fixed_array`     | 96x lower\*            | 14x lower          | 11x lower      | -8%          |
+| Backend | Layout            | Matrix materialization | Feature projection | Write     | Storage size |
+| ------- | ----------------- | ---------------------- | ------------------ | --------- | ------------ |
+| CSV     | `delimited_array` | +30%                   | +420%              | +39%      | +11%         |
+| CSV     | `json_array`      | +51%                   | +500%              | +41%      | +11%         |
+| Parquet | `fixed_array`     | -76%                   | -1%                | -88%      | -29%         |
+| DuckDB  | `duckdb_array`    | -86%                   | -52%               | -35%      | -57%         |
+| Zarr    | `zarr_matrix`     | -99%                   | +1,600%            | -99%\*    | -10%         |
+| TileDB  | `tiledb_dense`    | -99.57%                | +12%               | -99.98%\* | -11%         |
+| Vortex  | `fixed_array`     | -97%                   | -96%               | -98%      | -14%         |
+| Lance   | `fixed_array`     | -99%\*                 | -93%               | -91%      | -8%          |
 
 - marks a cell whose measurement varies by more than half of its median. 14 of 630 measurements (2%) vary this much.
 
