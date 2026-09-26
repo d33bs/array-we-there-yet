@@ -298,7 +298,11 @@ def test_setup_section_holds_the_environment_and_the_backends() -> None:
     assert headings == ["## Environment", "## Backends and access paths"]
     text = "\n".join(lines)
     assert "| Backend | Package or binding | Layouts measured |" in text
-    assert "| CSV | `pandas` CSV I/O | `wide`, `delimited_array` |" in text
+    assert (
+        "| CSV | [`pandas` CSV I/O]"
+        "(https://pandas.pydata.org/docs/reference/api/pandas.read_csv.html) "
+        "| `wide`, `delimited_array` |"
+    ) in text
     assert "Impact on timing" not in text
     assert "not only the storage layout" in text
 

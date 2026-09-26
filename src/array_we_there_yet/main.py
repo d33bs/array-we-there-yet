@@ -72,7 +72,7 @@ def report(
     )
     ratio_tables = write_ratio_tables(summary, output)
     write_profile_tables(summary, output)
-    figures = write_figures(summary, Path(figure_dir), sweep)
+    figures = write_figures(summary, Path(figure_dir), sweep, scaling)
     if update_readme_file:
         update_readme(
             readme_path=Path("README.md"),

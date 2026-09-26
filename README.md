@@ -24,6 +24,8 @@ the gain of any binary format.
 
 > **Main finding.** Array-like layouts read whole feature matrices 4.1x to 230x faster than wide layouts in 6 of 7 backends. Reading only 8 features gives mixed results.
 
+**Matrix materialization** loads every value into one in-memory table of numbers, ready for analysis or model training. **Feature projection** loads only a few chosen features, and skips the rest.
+
 - **Whole-matrix reads.** Matrix materialization is faster with the array-like layout in TileDB (230x), Zarr (99x), Lance (96x), Vortex (36x), DuckDB (7.1x), and Parquet (4.1x). It is slower in CSV (1.4x).
 - **Selecting a few features.** Reading 8 features is faster in Vortex (27x), Lance (14x), and DuckDB (2.1x). It is about the same in Parquet. It is slower in Zarr (17x), CSV (5.6x), and TileDB (1.1x).
 - **Text packing.** CSV packed arrays are slower than CSV wide for write, matrix materialization, random rows, feature projection, mixed retrieval, and vector norm, and faster only for full read. They are 11% larger.
@@ -40,24 +42,24 @@ The benchmark used synthetic data with 2,000 rows and 256 to 8,192 features. Eac
 - Each panel shows one operation or one summary measure.
 - Lower is better in every panel.
 - Ratio panels divide one result by a reference result. A value of 1.0 means the same as the reference.
-- Geometric Mean Time is the geometric mean of the time ratios across all operations. The geometric mean is the standard way to average ratios.
+- Geometric Mean Time is the geometric mean of the time ratios across all operations. The geometric mean is the standard way to average ratios (see References).
 - Error bars show the q25-to-q75 range across repetitions.
 - The y-axis uses a log scale to show small and large changes.
 - Dashed lines are wide layouts. Solid lines are array-like layouts.
-
-### Array-like layouts against their own wide layout
-
-![Time and storage ratios for array-like layouts against wide layouts](figures/backend_wide_facet_overview.png)
-
-Figure 1. Each array-like layout divided by the wide layout of the same backend. Values below 1.0 favor the array-like layout. This is the fairest comparison, because both layouts use the same format.
 
 ### Every layout against CSV wide
 
 ![Time and storage ratios for every layout against CSV wide](figures/combined_facet_overview.png)
 
-Figure 2. Every layout divided by CSV wide, which is the flat line at 1.0. Parquet wide is the only other wide layout shown here. The section Wide layouts shows all of them.
+Figure 1. Every layout divided by CSV wide, which is the flat line at 1.0. Parquet wide is the only other wide layout shown here. The section Wide layouts shows all of them.
 
-CSV wide is the reference because it is the most common way to share this kind of data. It is a text format, so ratios against it exaggerate the gain of any binary format. The figure before this one is the fairer comparison: each array-like layout against a wide layout in the same format.
+CSV wide is the reference because it is the most common way to share this kind of data. It is a text format, so ratios against it exaggerate the gain of any binary format. The next figure is the fairer comparison: each array-like layout against a wide layout in the same format.
+
+### Array-like layouts against their own wide layout
+
+![Time and storage ratios for array-like layouts against wide layouts](figures/backend_wide_facet_overview.png)
+
+Figure 2. Each array-like layout divided by the wide layout of the same backend. Values below 1.0 favor the array-like layout. This is the fairest comparison, because both layouts use the same format.
 
 ### Wide layouts
 
@@ -81,23 +83,24 @@ This example asks what it costs to move and read a 1.5 GB CSV wide file, and how
 
 **Size as Parquet.** The same data takes 0.55 GB as a Parquet file with the array layout, 63% smaller than the 1.5 GB CSV wide file. With compact settings it takes 0.46 GB, 69% smaller. As a Parquet wide file it takes 0.81 GB, 46% smaller.
 
+![Time and egress for the real-world example](figures/real_world_example.png)
+
+Figure 4. Left: time for one use, split into download and read. Right: egress cost over 1,000 uses. Lower is better in both panels. Layouts are sorted by time for one use, so CSV wide is first.
+
 ### One use
 
-| Layout                               | Size    | Download | Read into memory | Total time | Egress cost |
-| ------------------------------------ | ------- | -------- | ---------------- | ---------- | ----------- |
-| CSV `wide`                           | 1.5 GB  | 15 s     | 11 s             | 26 s       | $0.135      |
-| CSV `wide` (compact)                 | 0.64 GB | 6.4 s    | 13 s             | 20 s       | $0.058      |
-| Parquet `wide`                       | 0.81 GB | 8.1 s    | 0.6 s            | 8.7 s      | $0.073      |
-| Parquet `fixed_array`                | 0.55 GB | 5.5 s    | 0.37 s           | 5.9 s      | $0.050      |
-| Parquet `fixed_array` (compact)      | 0.46 GB | 4.6 s    | 0.58 s           | 5.2 s      | $0.042      |
-| DuckDB `duckdb_array`                | 0.88 GB | 8.8 s    | 0.38 s           | 9.2 s      | $0.079      |
-| Zarr `zarr_matrix`                   | 0.51 GB | 5.1 s    | 0.33 s           | 5.5 s      | $0.046      |
-| TileDB `tiledb_dense`                | 0.57 GB | 5.7 s    | 0.16 s           | 5.9 s      | $0.051      |
-| Vortex `fixed_array`                 | 0.48 GB | 4.8 s    | 0.11 s           | 5 s        | $0.044      |
-| Lance `fixed_array`                  | 0.55 GB | 5.5 s    | 0.11 s           | 5.6 s      | $0.049      |
-| Parquet `wide` (8 features streamed) | 4.9 MB  | 0.049 s  | 0.32 s           | 0.36 s     | $0.0004     |
-
-The streamed row is for a user who needs only 8 features. The other rows download and read the whole file.
+| Layout                          | Size    | Download | Read into memory | Total time | Egress cost |
+| ------------------------------- | ------- | -------- | ---------------- | ---------- | ----------- |
+| CSV `wide`                      | 1.5 GB  | 15 s     | 11 s             | 26 s       | $0.135      |
+| CSV `wide` (compact)            | 0.64 GB | 6.4 s    | 13 s             | 20 s       | $0.058      |
+| Parquet `wide`                  | 0.81 GB | 8.1 s    | 0.6 s            | 8.7 s      | $0.073      |
+| Parquet `fixed_array`           | 0.55 GB | 5.5 s    | 0.37 s           | 5.9 s      | $0.050      |
+| Parquet `fixed_array` (compact) | 0.46 GB | 4.6 s    | 0.58 s           | 5.2 s      | $0.042      |
+| DuckDB `duckdb_array`           | 0.88 GB | 8.8 s    | 0.38 s           | 9.2 s      | $0.079      |
+| Zarr `zarr_matrix`              | 0.51 GB | 5.1 s    | 0.33 s           | 5.5 s      | $0.046      |
+| TileDB `tiledb_dense`           | 0.57 GB | 5.7 s    | 0.16 s           | 5.9 s      | $0.051      |
+| Vortex `fixed_array`            | 0.48 GB | 4.8 s    | 0.11 s           | 5 s        | $0.044      |
+| Lance `fixed_array`             | 0.55 GB | 5.5 s    | 0.11 s           | 5.6 s      | $0.049      |
 
 Compact rows use the compact write profile, which writes smaller files and can cost time. See Write settings.
 
@@ -105,21 +108,18 @@ Compact rows use the compact write profile, which writes smaller files and can c
 
 Time spent and egress spent are the totals over 1,000 uses. Time saved and egress cost saved compare a layout with CSV wide. Time is the download plus the read.
 
-| Layout                               | Time spent | Egress spent | Time saved | Egress cost saved |
-| ------------------------------------ | ---------- | ------------ | ---------- | ----------------- |
-| CSV `wide`                           | 7.2 h      | $135         | baseline   | baseline          |
-| CSV `wide` (compact)                 | 5.5 h      | $58          | 1.7 h      | $77               |
-| Parquet `wide`                       | 2.4 h      | $73          | 4.8 h      | $62               |
-| Parquet `fixed_array`                | 1.6 h      | $50          | 5.6 h      | $85               |
-| Parquet `fixed_array` (compact)      | 1.4 h      | $42          | 5.8 h      | $93               |
-| DuckDB `duckdb_array`                | 2.5 h      | $79          | 4.7 h      | $56               |
-| Zarr `zarr_matrix`                   | 1.5 h      | $46          | 5.7 h      | $89               |
-| TileDB `tiledb_dense`                | 1.6 h      | $51          | 5.6 h      | $84               |
-| Vortex `fixed_array`                 | 1.4 h      | $44          | 5.9 h      | $91               |
-| Lance `fixed_array`                  | 1.6 h      | $49          | 5.7 h      | $85               |
-| Parquet `wide` (8 features streamed) | 6.1 min    | $0.438       | 4.8 h      | $134              |
-
-The streamed row compares with CSV wide, which downloads the whole file and reads only 8 features.
+| Layout                          | Time spent | Egress spent | Time saved | Egress cost saved |
+| ------------------------------- | ---------- | ------------ | ---------- | ----------------- |
+| CSV `wide`                      | 7.2 h      | $135         | baseline   | baseline          |
+| CSV `wide` (compact)            | 5.5 h      | $58          | 1.7 h      | $77               |
+| Parquet `wide`                  | 2.4 h      | $73          | 4.8 h      | $62               |
+| Parquet `fixed_array`           | 1.6 h      | $50          | 5.6 h      | $85               |
+| Parquet `fixed_array` (compact) | 1.4 h      | $42          | 5.8 h      | $93               |
+| DuckDB `duckdb_array`           | 2.5 h      | $79          | 4.7 h      | $56               |
+| Zarr `zarr_matrix`              | 1.5 h      | $46          | 5.7 h      | $89               |
+| TileDB `tiledb_dense`           | 1.6 h      | $51          | 5.6 h      | $84               |
+| Vortex `fixed_array`            | 1.4 h      | $44          | 5.9 h      | $91               |
+| Lance `fixed_array`             | 1.6 h      | $49          | 5.7 h      | $85               |
 
 ### Streaming a Parquet file
 
@@ -224,7 +224,7 @@ The row count grows 100x, from 2,000 to 200,000 rows, at 1,024 features. Each ce
 
 ![Time against row count for each layout](figures/row_scaling.png)
 
-Figure 4. Median time against row count. Both axes use a log scale.
+Figure 5. Median time against row count. Both axes use a log scale.
 
 | Layout                | Matrix materialization | Random rows | Feature projection |
 | --------------------- | ---------------------- | ----------- | ------------------ |
@@ -292,7 +292,7 @@ This appendix uses synthetic random data. It shows how the compact profile moves
 
 ![Storage size against time for the default and compact profiles](figures/encoding_profiles.png)
 
-Figure 5. Storage size against time at the largest feature count. Each arrow goes from the default profile (filled) to the compact profile (open). Points without an arrow have no compact profile. Squares are wide layouts and circles are array-like layouts. Lower and further left is better.
+Figure 6. Storage size against time at the largest feature count. Each arrow goes from the default profile (filled) to the compact profile (open). Points without an arrow have no compact profile. Squares are wide layouts and circles are array-like layouts. Lower and further left is better.
 
 Changes from the default profile to the compact profile:
 
@@ -341,9 +341,9 @@ Each run measures these operations:
 | ---------------------- | --------------------------------------------------------------------------------------------------------------- |
 | Write                  | Write the full dataset.                                                                                         |
 | Full read              | Read the full table.                                                                                            |
-| Matrix materialization | Read the data into one `N x D` NumPy array.                                                                     |
+| Matrix materialization | Read every value into one `N x D` NumPy array, a single in-memory table of numbers.                             |
 | Random rows            | Read 128 random rows, using each format's own row-selection call. CSV has none, so it reads the whole file.     |
-| Feature projection     | Read a fixed set of features.                                                                                   |
+| Feature projection     | Read only a few chosen features and skip the rest. Here it is 8 features.                                       |
 | Mixed retrieval        | Read metadata and selected features together, using each format's row-selection call. CSV reads the whole file. |
 | Vector norm            | Read the matrix as in matrix materialization, then compute the L2 norm of each row in NumPy.                    |
 
@@ -449,15 +449,15 @@ wide and ratios to the wide layout of the same backend.
 
 ## Backends and access paths
 
-| Backend | Package or binding              | Layouts measured                        |
-| ------- | ------------------------------- | --------------------------------------- |
-| CSV     | `pandas` CSV I/O                | `wide`, `delimited_array`, `json_array` |
-| Parquet | `pyarrow.parquet`               | `wide`, `fixed_array`                   |
-| DuckDB  | `duckdb` Python package         | `wide`, `duckdb_array`                  |
-| Zarr    | `zarr` Python package           | `wide`, `zarr_matrix`                   |
-| TileDB  | `tiledb` Python package         | `wide`, `tiledb_dense`                  |
-| Vortex  | `vortex-data` (`vortex` import) | `wide`, `fixed_array`                   |
-| Lance   | `lance` Python package          | `wide`, `fixed_array`                   |
+| Backend | Package or binding                                                                    | Layouts measured                        |
+| ------- | ------------------------------------------------------------------------------------- | --------------------------------------- |
+| CSV     | [`pandas` CSV I/O](https://pandas.pydata.org/docs/reference/api/pandas.read_csv.html) | `wide`, `delimited_array`, `json_array` |
+| Parquet | [`pyarrow.parquet`](https://arrow.apache.org/docs/python/parquet.html)                | `wide`, `fixed_array`                   |
+| DuckDB  | [`duckdb` Python package](https://duckdb.org/)                                        | `wide`, `duckdb_array`                  |
+| Zarr    | [`zarr` Python package](https://zarr.dev/)                                            | `wide`, `zarr_matrix`                   |
+| TileDB  | [`tiledb` Python package](https://docs.tiledb.com/)                                   | `wide`, `tiledb_dense`                  |
+| Vortex  | [`vortex-data`](https://docs.vortex.dev/) (`vortex` import)                           | `wide`, `fixed_array`                   |
+| Lance   | [`lance` Python package](https://lance.org/)                                          | `wide`, `fixed_array`                   |
 
 The timings include each package and binding, not only the storage layout. Different language layers can change the result.
 
@@ -511,6 +511,33 @@ compare the two.
 - **Scope.** The benchmark does not measure filters, updates, concurrent access,
   schema changes, vector search, or tool support.
 
+## References
+
+**File formats and libraries**
+
+- [Apache Parquet file format](https://parquet.apache.org/docs/file-format/): row groups, column chunks, and the footer that lets a reader skip data.
+- [Apache Parquet encodings](https://parquet.apache.org/docs/file-format/data-pages/encodings/): the dictionary, run-length, and `BYTE_STREAM_SPLIT` encodings behind the write settings.
+- [Apache Arrow columnar format](https://arrow.apache.org/docs/format/Columnar.html): the `FixedSizeList` type that holds the array layout in Parquet, Vortex, and Lance.
+- [Zarr specifications](https://zarr-specs.readthedocs.io/): chunked arrays and their codecs.
+- [TileDB documentation](https://docs.tiledb.com/): dense arrays, tiles, and filters.
+- [DuckDB `ARRAY` type](https://duckdb.org/docs/sql/data_types/array): the fixed-size `FLOAT[N]` column.
+- [Vortex documentation](https://docs.vortex.dev/): the Vortex file format and its Python package.
+- [Lance documentation](https://lance.org/): the Lance file format and its Python package.
+- [NumPy `.npy` format](https://numpy.org/doc/stable/reference/generated/numpy.lib.format.html): the file behind the NumPy floor.
+
+**Compression**
+
+- [Zstandard, RFC 8878](https://www.rfc-editor.org/rfc/rfc8878): the `zstd` codec in the compact profile.
+- [Blosc](https://www.blosc.org/): the chunk compressor that Zarr uses in the compact profile.
+
+**Streaming and cost**
+
+- [HTTP range requests, RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html#name-range-requests): how a client asks for part of a file. The pricing pages for egress are listed in Real-world example.
+
+**Method**
+
+- Fleming, P. J. and Wallace, J. J. (1986). [How not to lie with statistics: the correct way to summarize benchmark results](https://doi.org/10.1145/5666.5673). *Communications of the ACM* 29(3), 218-221. This is the case for the geometric mean of ratios.
+
 ## Terminology
 
 | Term                   | Meaning                                                                                               |
@@ -521,7 +548,8 @@ compare the two.
 | Compact profile        | Write settings that make smaller files and can cost time. See Write settings.                         |
 | Egress                 | The fee that a cloud provider charges when data leaves its network, billed per gigabyte.              |
 | Feature                | One numeric measurement for a row.                                                                    |
-| Matrix materialization | Reading data into an `N x D` NumPy array.                                                             |
+| Feature projection     | Reading only a few chosen features and skipping the rest.                                             |
+| Matrix materialization | Reading every value into one in-memory table of numbers (an `N x D` NumPy array).                     |
 | Metadata               | Descriptive columns, such as sample ID or plate ID.                                                   |
 | Packed array           | An array stored as text inside one CSV field.                                                         |
 | Ratio                  | One result divided by a reference result.                                                             |

@@ -102,13 +102,18 @@ BACKEND_DISPLAY_NAMES = {
     "lance": "Lance",
 }
 BACKEND_PACKAGES = {
-    "csv": "`pandas` CSV I/O",
-    "parquet": "`pyarrow.parquet`",
-    "duckdb": "`duckdb` Python package",
-    "zarr": "`zarr` Python package",
-    "tiledb": "`tiledb` Python package",
-    "vortex": "`vortex-data` (`vortex` import)",
-    "lance": "`lance` Python package",
+    "csv": (
+        "[`pandas` CSV I/O]"
+        "(https://pandas.pydata.org/docs/reference/api/pandas.read_csv.html)"
+    ),
+    "parquet": (
+        "[`pyarrow.parquet`](https://arrow.apache.org/docs/python/parquet.html)"
+    ),
+    "duckdb": "[`duckdb` Python package](https://duckdb.org/)",
+    "zarr": "[`zarr` Python package](https://zarr.dev/)",
+    "tiledb": "[`tiledb` Python package](https://docs.tiledb.com/)",
+    "vortex": "[`vortex-data`](https://docs.vortex.dev/) (`vortex` import)",
+    "lance": "[`lance` Python package](https://lance.org/)",
 }
 LAYOUT_COLORS = {
     "wide": "#4D4D4D",
@@ -224,6 +229,7 @@ def write_figures(
     summary: pd.DataFrame,
     figure_dir: Path = Path("figures"),
     sweep: pd.DataFrame | None = None,
+    scaling: pd.DataFrame | None = None,
 ) -> list[Path]:
     """Write absolute comparison figures and compact ratio figures."""
     figure_dir.mkdir(parents=True, exist_ok=True)
@@ -242,6 +248,9 @@ def write_figures(
     row_scaling = write_row_scaling_figure(sweep, figure_dir)
     if row_scaling is not None:
         paths.append(row_scaling)
+    real_world = write_real_world_figure(all_profiles, scaling, figure_dir)
+    if real_world is not None:
+        paths.append(real_world)
     profiles = write_profile_figure(all_profiles, figure_dir)
     if profiles is not None:
         paths.append(profiles)
@@ -1279,7 +1288,7 @@ def render_results_section(  # noqa: PLR0913
         (
             "- Geometric Mean Time is the geometric mean of the time ratios "
             "across all operations. The geometric mean is the standard way "
-            "to average ratios."
+            "to average ratios (see References)."
         ),
         "- Error bars show the q25-to-q75 range across repetitions.",
         "- The y-axis uses a log scale to show small and large changes.",
@@ -1290,16 +1299,6 @@ def render_results_section(  # noqa: PLR0913
     figure_number = 0
     for filename, heading, alt_text, caption in [
         (
-            "backend_wide_facet_overview.png",
-            "Array-like layouts against their own wide layout",
-            "Time and storage ratios for array-like layouts against wide layouts",
-            (
-                "Each array-like layout divided by the wide layout of the same "
-                "backend. Values below 1.0 favor the array-like layout. This is "
-                "the fairest comparison, because both layouts use the same format."
-            ),
-        ),
-        (
             "combined_facet_overview.png",
             "Every layout against CSV wide",
             "Time and storage ratios for every layout against CSV wide",
@@ -1307,6 +1306,16 @@ def render_results_section(  # noqa: PLR0913
                 "Every layout divided by CSV wide, which is the flat line at 1.0. "
                 "Parquet wide is the only other wide layout shown here. The "
                 "section Wide layouts shows all of them."
+            ),
+        ),
+        (
+            "backend_wide_facet_overview.png",
+            "Array-like layouts against their own wide layout",
+            "Time and storage ratios for array-like layouts against wide layouts",
+            (
+                "Each array-like layout divided by the wide layout of the same "
+                "backend. Values below 1.0 favor the array-like layout. This is "
+                "the fairest comparison, because both layouts use the same format."
             ),
         ),
         (
@@ -1333,7 +1342,14 @@ def render_results_section(  # noqa: PLR0913
         if filename == "combined_facet_overview.png":
             lines.extend(["", REFERENCE_NOTE])
 
-    lines.extend(_blank_before(real_world_section(all_profiles, scaling)))
+    real_world_figure = figures.get("real_world_example.png")
+    if real_world_figure is not None:
+        figure_number += 1
+    lines.extend(
+        _blank_before(
+            real_world_section(all_profiles, scaling, real_world_figure, figure_number)
+        )
+    )
     lines.extend(
         [
             "",
@@ -1386,7 +1402,7 @@ def render_results_section(  # noqa: PLR0913
 REFERENCE_NOTE = (
     "CSV wide is the reference because it is the most common way to share this "
     "kind of data. It is a text format, so ratios against it exaggerate the gain "
-    "of any binary format. The figure before this one is the fairer comparison: "
+    "of any binary format. The next figure is the fairer comparison: "
     "each array-like layout against a wide layout in the same format."
 )
 
@@ -1562,6 +1578,13 @@ def _feature_count_text(summary: pd.DataFrame) -> str:
     return f"{digits[0]} features" if digits else "a few features"
 
 
+PLAIN_OPERATIONS = (
+    "**Matrix materialization** loads every value into one in-memory table of "
+    "numbers, ready for analysis or model training. **Feature projection** "
+    "loads only a few chosen features, and skips the rest."
+)
+
+
 def summary_section(
     summary: pd.DataFrame,
     extra_bullets: list[str] | None = None,
@@ -1583,7 +1606,7 @@ def summary_section(
 
     quote = _main_finding(faster, len(matrix), groups, features)
     if quote:
-        lines.extend([f"> **Main finding.** {quote}", ""])
+        lines.extend([f"> **Main finding.** {quote}", "", PLAIN_OPERATIONS, ""])
     if faster:
         lines.append(_matrix_bullet(faster, slower))
     if groups:
@@ -2445,17 +2468,93 @@ def real_world_table(
     table["egress_saved_dollars"] = (
         first["egress_dollars"] - table["egress_dollars"]
     ) * EXAMPLE_USES
-    csv_projection = value(
-        "csv", "wide", "default", "feature_projection", "median_seconds"
-    )
-    if csv_projection is not None:
-        # CSV downloads the whole file but reads only the features that are needed.
-        csv_total = first["download_seconds"] + csv_projection * factor
-        streamed = table["variant"] == "streamed"
-        table.loc[streamed, "time_saved_seconds"] = (
-            csv_total - table.loc[streamed, "total_seconds"]
-        ) * EXAMPLE_USES
     return table
+
+
+def real_world_figure_data(
+    summary: pd.DataFrame,
+    scaling: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Return time and egress for each layout that reads the whole file.
+
+    The streamed layout is left out. It reads only a few features, so it does
+    not answer the same question as the other layouts.
+    """
+    if summary.empty:
+        return pd.DataFrame()
+    table = real_world_table(summary, scaling)
+    if table.empty:
+        return pd.DataFrame()
+    table = table[table["variant"] != "streamed"]
+    data = pd.DataFrame(
+        {
+            "name": [
+                _example_name(row).replace("`", "") for row in table.to_dict("records")
+            ],
+            "download_seconds": table["download_seconds"],
+            "read_seconds": table["read_seconds"],
+            "total_seconds": table["total_seconds"],
+            "egress_dollars_total": table["egress_dollars"] * EXAMPLE_USES,
+        }
+    )
+    return data.sort_values(
+        "total_seconds", ascending=False, kind="stable"
+    ).reset_index(drop=True)
+
+
+def write_real_world_figure(
+    summary: pd.DataFrame,
+    scaling: pd.DataFrame | None = None,
+    figure_dir: Path = Path("figures"),
+) -> Path | None:
+    """Plot time for one use and egress over many uses for the real-world example."""
+    data = real_world_figure_data(summary, scaling)
+    if data.empty:
+        return None
+    figure_dir.mkdir(parents=True, exist_ok=True)
+    positions = np.arange(len(data))
+    fig, (time_ax, cost_ax) = plt.subplots(
+        1,
+        2,
+        figsize=(13, 0.5 * len(data) + 2.4),
+        sharey=True,
+        gridspec_kw={"width_ratios": [1.15, 1]},
+    )
+    time_ax.barh(positions, data["download_seconds"], color="#56B4E9", label="Download")
+    time_ax.barh(
+        positions,
+        data["read_seconds"],
+        left=data["download_seconds"],
+        color="#0072B2",
+        label="Read into memory",
+    )
+    cost_ax.barh(positions, data["egress_dollars_total"], color="#D55E00")
+    for position, seconds, dollars in zip(
+        positions, data["total_seconds"], data["egress_dollars_total"], strict=True
+    ):
+        time_ax.text(
+            seconds, position, f" {_duration(seconds)}", va="center", fontsize="small"
+        )
+        cost_ax.text(
+            dollars, position, f" {_dollars(dollars)}", va="center", fontsize="small"
+        )
+    time_ax.set_yticks(positions, data["name"])
+    time_ax.invert_yaxis()
+    time_ax.set_title(_direction_title("Time for one use", better="lower"))
+    time_ax.set_xlabel("Seconds")
+    time_ax.legend(loc="lower right", fontsize="small")
+    cost_ax.set_title(
+        _direction_title(f"Egress over {EXAMPLE_USES:,} uses", better="lower")
+    )
+    cost_ax.set_xlabel("Dollars")
+    for ax in (time_ax, cost_ax):
+        ax.set_xlim(0, ax.get_xlim()[1] * 1.18)
+        ax.grid(True, axis="x", alpha=0.25)
+    fig.tight_layout()
+    path = figure_dir / "real_world_example.png"
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+    return path
 
 
 def _example_name(row: dict[str, Any]) -> str:
@@ -2525,16 +2624,6 @@ def _savings_row(row: dict[str, Any], *, is_baseline: bool) -> str:
     )
 
 
-def _streamed_savings_note(records: list[dict[str, Any]]) -> str | None:
-    """Explain what the streamed row is compared with in the savings table."""
-    if not any(row.get("variant") == "streamed" for row in records):
-        return None
-    return (
-        "The streamed row compares with CSV wide, which downloads the whole file "
-        f"and reads only {EXAMPLE_STREAM_FEATURES} features."
-    )
-
-
 def _compact_note(records: list[dict[str, Any]]) -> str | None:
     """Explain the compact rows where the reader first meets them."""
     if not any(row["profile"] == "compact" for row in records):
@@ -2542,16 +2631,6 @@ def _compact_note(records: list[dict[str, Any]]) -> str | None:
     return (
         "Compact rows use the compact write profile, which writes smaller files "
         "and can cost time. See Write settings."
-    )
-
-
-def _streamed_note(records: list[dict[str, Any]]) -> str | None:
-    """Explain that the streamed row answers a narrower question."""
-    if not any(row.get("variant") == "streamed" for row in records):
-        return None
-    return (
-        f"The streamed row is for a user who needs only {EXAMPLE_STREAM_FEATURES} "
-        "features. The other rows download and read the whole file."
     )
 
 
@@ -2757,15 +2836,34 @@ def _scaling_check_lines(records: list[dict[str, Any]]) -> list[str]:
     ]
 
 
+def _real_world_figure_lines(figure: Path | None, figure_number: int) -> list[str]:
+    """Return the figure and its caption, or nothing without a figure."""
+    if figure is None:
+        return []
+    return [
+        f"![Time and egress for the real-world example]({figure.as_posix()})",
+        "",
+        (
+            f"Figure {figure_number}. Left: time for one use, split into download "
+            "and read. Right: egress cost over "
+            f"{EXAMPLE_USES:,} uses. Lower is better in both panels. Layouts are "
+            "sorted by time for one use, so CSV wide is first."
+        ),
+    ]
+
+
 def real_world_section(
     summary: pd.DataFrame,
     scaling: pd.DataFrame | None = None,
+    figure: Path | None = None,
+    figure_number: int = 0,
 ) -> list[str]:
     """Return the real-world example: time and egress for a 1.5 GB CSV wide file."""
     table = real_world_table(summary, scaling)
     if table.empty:
         return []
     records = table.to_dict("records")
+    whole_file = [row for row in records if row.get("variant") != "streamed"]
     rows_text = f"{round(records[0]['rows_per_file'], -2):,.0f}"
     features = int(summary["dimensions"].max())
     one_use = [
@@ -2777,7 +2875,7 @@ def real_world_section(
             f"| {_duration(row['read_seconds'])} "
             f"| {_duration(row['total_seconds'])} "
             f"| {_dollars(row['egress_dollars'])} |"
-            for row in records
+            for row in whole_file
         ),
     ]
     savings = [
@@ -2785,7 +2883,7 @@ def real_world_section(
         "| ------ | ---------- | ------------ | ---------- | ----------------- |",
         *(
             _savings_row(row, is_baseline=index == 0)
-            for index, row in enumerate(records)
+            for index, row in enumerate(whole_file)
         ),
     ]
     return [
@@ -2832,11 +2930,11 @@ def real_world_section(
         ),
         *_optional_paragraph(_example_takeaway(records)),
         *_optional_paragraph(_parquet_size_paragraph(records)),
+        *_blank_before(_real_world_figure_lines(figure, figure_number)),
         "",
         "### One use",
         "",
         *one_use,
-        *_optional_paragraph(_streamed_note(records)),
         *_optional_paragraph(_compact_note(records)),
         "",
         f"### Savings over {EXAMPLE_USES:,} uses",
@@ -2848,7 +2946,6 @@ def real_world_section(
         ),
         "",
         *savings,
-        *_optional_paragraph(_streamed_savings_note(records)),
         *_blank_before(_streaming_lines(records, features)),
         *_blank_before(_scaling_check_lines(records)),
         "",

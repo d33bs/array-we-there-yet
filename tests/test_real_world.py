@@ -281,71 +281,15 @@ def test_dollars_use_four_decimals_below_one_cent() -> None:
     assert _dollars(0.01) == "$0.010"
 
 
-def test_streamed_row_is_added_to_the_one_use_table() -> None:
-    """A user who needs 8 features downloads only those columns and the footer."""
+def test_streamed_row_is_left_out_of_the_tables_because_it_is_not_comparable() -> None:
+    """The tables compare layouts that read the whole file for all features."""
     text = "\n".join(real_world_section(_summary_with_wide()))
-
-    assert (
-        "| Parquet `wide` (8 features streamed) | 4.9 MB | 0.049 s | 0.016 s "
-        "| 0.065 s | $0.0004 |"
-    ) in text
-
-
-def test_streamed_row_is_added_to_the_savings_table() -> None:
-    """Streaming saves nearly the whole download and read for that user."""
-    text = "\n".join(real_world_section(_summary_with_wide()))
-
-    assert (
-        "| Parquet `wide` (8 features streamed) | 1.1 min | $0.439 | 5.3 h | $135 |"
-    ) in text
-
-
-def test_streamed_row_is_explained_under_the_table() -> None:
-    """The reader is told that the last row answers a narrower question."""
-    text = "\n".join(real_world_section(_summary_with_wide()))
-
-    assert (
-        "The streamed row is for a user who needs only 8 features. The other rows "
-        "download and read the whole file."
-    ) in text
-
-
-def test_streamed_row_needs_a_feature_projection_time() -> None:
-    """Without a measured projection time there is no streamed row."""
-    summary = _summary_with_wide()
-    summary = summary[summary["operation"] != "feature_projection"]
-
-    text = "\n".join(real_world_section(summary))
 
     assert "8 features streamed" not in text
-    assert "The streamed row is for" not in text
-
-
-def test_streamed_saving_compares_with_csv_reading_only_8_features() -> None:
-    """CSV downloads the whole file but reads only the 8 features that are needed."""
-    text = "\n".join(real_world_section(_summary_with_wide()))
-
-    assert (
-        "The streamed row compares with CSV wide, which downloads the whole file "
-        "and reads only 8 features."
-    ) in text
-
-
-def test_streamed_saving_falls_back_to_the_whole_read_without_csv_projection() -> None:
-    """Without a CSV projection time the saving uses the whole-matrix read."""
-    summary = _summary_with_wide()
-    summary = summary[
-        ~(
-            (summary["backend"] == "csv")
-            & (summary["operation"] == "feature_projection")
-        )
-    ]
-
-    text = "\n".join(real_world_section(summary))
-
-    assert (
-        "| Parquet `wide` (8 features streamed) | 1.1 min | $0.439 | 6.4 h | $135 |"
-    ) in text
+    assert "The streamed row" not in text
+    assert "| Parquet `wide` " in text
+    assert "### Streaming a Parquet file" in text
+    assert "| 8 features of 8,192 " in text
 
 
 def test_section_says_the_egress_cost_is_an_estimate_for_an_example() -> None:

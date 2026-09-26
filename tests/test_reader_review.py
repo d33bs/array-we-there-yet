@@ -1,5 +1,7 @@
 """Tests for the fixes from reading the page as a first-time reader."""
 
+from pathlib import Path
+
 import pandas as pd
 
 from array_we_there_yet.report import (
@@ -191,18 +193,20 @@ def test_encoding_table_intro_says_the_sizes_are_for_a_given_row_count() -> None
     assert "Sizes are for 2,000 rows and can change with more rows." in section
 
 
-def test_the_fairest_comparison_is_the_first_figure(tmp_path) -> None:  # noqa: ANN001
-    """Array-like against its own wide layout answers the main question first."""
+def test_every_layout_against_csv_wide_is_the_first_figure(tmp_path) -> None:  # noqa: ANN001
+    """The reference comparison comes first, and its note points to the fairer one."""
     summary = _figure_summary()
     paths = write_figures(summary, tmp_path)
 
     section = render_results_section(summary=summary, figure_paths=paths)
 
-    own = section.index("### Array-like layouts against their own wide layout")
     every = section.index("### Every layout against CSV wide")
+    own = section.index("### Array-like layouts against their own wide layout")
     wide = section.index("### Wide layouts")
-    assert own < every < wide
-    assert "Figure 1. Each array-like layout divided by the wide layout" in section
+    assert every < own < wide
+    assert "Figure 1. Every layout divided by CSV wide" in section
+    assert "The next figure is the fairer comparison" in section
+    assert "The figure before this one" not in section
 
 
 def test_figure_notes_refer_to_sections_by_name_not_by_number() -> None:
@@ -211,3 +215,29 @@ def test_figure_notes_refer_to_sections_by_name_not_by_number() -> None:
 
     assert "Figure 2 shows" not in section
     assert "Figure 3 is" not in section
+
+
+def test_summary_defines_the_two_operations_in_plain_words() -> None:
+    """A reader meets both terms in the bullets, so the summary explains them first."""
+    lines = summary_section(_story_summary())
+
+    gloss = next(line for line in lines if line.startswith("**Matrix"))
+    assert gloss == (
+        "**Matrix materialization** loads every value into one in-memory table of "
+        "numbers, ready for analysis or model training. **Feature projection** "
+        "loads only a few chosen features, and skips the rest."
+    )
+    assert lines.index(gloss) < next(
+        index for index, line in enumerate(lines) if line.startswith("- **")
+    )
+
+
+def test_readme_defines_both_operations_in_plain_words() -> None:
+    """The static tables use the same plain wording as the summary."""
+    readme = Path("README.md").read_text()
+
+    assert "Read every value into one `N x D` NumPy array" in readme
+    assert "Read only a few chosen features and skip the rest." in readme
+    terminology = readme[readme.index("## Terminology") :]
+    assert "| Feature projection" in terminology
+    assert "| Matrix materialization" in terminology
