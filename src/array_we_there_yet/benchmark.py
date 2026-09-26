@@ -71,6 +71,7 @@ class BenchmarkConfig:
     output_dir: Path = Path("results")
     artifact_dir: Path = Path("results/artifacts")
     figure_dir: Path = Path("figures")
+    csv_max_rows: int | None = None
 
 
 @dataclass(frozen=True)
@@ -300,6 +301,8 @@ def run_benchmarks(config: BenchmarkConfig) -> pd.DataFrame:
         )
 
         for runner in layout_runners():
+            if _skipped(config, runner):
+                continue
             artifact = _measure_writes(
                 config=config,
                 runner=runner,
@@ -395,6 +398,7 @@ def combine_runs(
         (input_dirs[0] / "environment.json").read_text(encoding="utf-8")
     )
     environment["runs"] = len(input_dirs)
+    environment["git_commit"] = commits.pop()
     (output_dir / "environment.json").write_text(
         json.dumps(environment, indent=2, sort_keys=True), encoding="utf-8"
     )
@@ -699,6 +703,15 @@ def write_environment(
     )
 
 
+def _skipped(config: BenchmarkConfig, runner: LayoutRunner) -> bool:
+    """Return whether a layout is left out because the dataset has too many rows."""
+    return (
+        runner.backend == "csv"
+        and config.csv_max_rows is not None
+        and config.rows > config.csv_max_rows
+    )
+
+
 def _measure_writes(
     *,
     config: BenchmarkConfig,
@@ -750,6 +763,7 @@ def _measure_reads(
     git_commit: str,
     records: list[BenchmarkResult],
     include_mixed: bool = True,
+    only: frozenset[str] | None = None,
 ) -> None:
     operations: list[tuple[str, str, Callable[[], Any], Callable[[Any], None]]] = [
         (
@@ -807,6 +821,8 @@ def _measure_reads(
     ]
     if not include_mixed:
         operations = [item for item in operations if item[0] != "mixed_retrieval"]
+    if only is not None:
+        operations = [item for item in operations if item[0] in only]
     for operation, parameter, call, validate in operations:
         # At least one untimed call gives the size of a single call.
         warmup_seconds = 0.0

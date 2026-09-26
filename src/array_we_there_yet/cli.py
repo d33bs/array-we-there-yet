@@ -7,6 +7,8 @@ import fire
 from array_we_there_yet.main import combine as combine_runs_and_report
 from array_we_there_yet.main import report as report_results
 from array_we_there_yet.main import run
+from array_we_there_yet.main import scaling as run_scaling
+from array_we_there_yet.main import sweep as run_sweep
 
 
 class ArrayWeThereYetCLI:
@@ -50,7 +52,7 @@ class ArrayWeThereYetCLI:
 
     def combine(
         self,
-        inputs: str,
+        inputs: str | tuple[str, ...],
         output_dir: str = "results",
         figure_dir: str = "figures",
         update_readme_file: bool = True,
@@ -63,6 +65,36 @@ class ArrayWeThereYetCLI:
             figure_dir=figure_dir,
             update_readme_file=update_readme_file,
             allow_dirty=allow_dirty,
+        )
+
+    def sweep(
+        self,
+        row_counts: str | tuple[int, ...] = "2000,20000,200000",
+        dimensions: int = 1024,
+        output_dir: str = "results",
+        figure_dir: str = "figures",
+        update_readme_file: bool = True,
+    ) -> dict[str, str]:
+        """Run the benchmark at several row counts, then rebuild the report."""
+        return run_sweep(
+            row_counts=row_counts,
+            dimensions=dimensions,
+            output_dir=output_dir,
+            figure_dir=figure_dir,
+            update_readme_file=update_readme_file,
+        )
+
+    def scaling(
+        self,
+        output_dir: str = "results",
+        figure_dir: str = "figures",
+        update_readme_file: bool = True,
+    ) -> dict[str, str]:
+        """Write and read a real 1.5 GB CSV wide file, then rebuild the report."""
+        return run_scaling(
+            output_dir=output_dir,
+            figure_dir=figure_dir,
+            update_readme_file=update_readme_file,
         )
 
 

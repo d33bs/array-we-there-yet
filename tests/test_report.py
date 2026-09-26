@@ -93,6 +93,7 @@ def test_results_section_has_a_professional_structure(tmp_path: Path) -> None:
         "## Real-world example",
         "### One use",
         "### Savings over 1,000 uses",
+        "### Streaming a Parquet file",
         "## Results",
         "### Key findings",
         "### How to read the figures",

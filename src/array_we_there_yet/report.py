@@ -25,6 +25,31 @@ EXAMPLE_DATASET_GB = 1.5
 EXAMPLE_DOWNLOAD_MB_PER_SECOND = 100
 EXAMPLE_EGRESS_DOLLARS_PER_GB = 0.09
 EXAMPLE_USES = 1_000
+EXAMPLE_STREAM_FEATURES = 8
+EGRESS_PRICING_PAGES = [
+    (
+        "AWS S3",
+        "https://aws.amazon.com/s3/pricing/",
+        "the source of the $0.09 per GB used here.",
+    ),
+    (
+        "Google Cloud",
+        "https://cloud.google.com/vpc/network-pricing",
+        "egress is billed per GiB and depends on the source region.",
+    ),
+    (
+        "Azure",
+        "https://azure.microsoft.com/en-us/pricing/details/bandwidth/",
+        "the first 100 GB each month is free, and the rate depends on the region.",
+    ),
+    (
+        "Cloudflare R2",
+        "https://developers.cloudflare.com/r2/pricing/",
+        "no egress charges. The host pays for storage and operations instead.",
+    ),
+]
+EXAMPLE_STREAM_ROWS = 1_000
+PARQUET_FOOTER_BYTES_PER_COLUMN = 500
 EXAMPLE_LAYOUTS = [
     ("csv", "wide", "default"),
     ("csv", "wide", "compact"),
@@ -198,6 +223,7 @@ def _ratios_against(
 def write_figures(
     summary: pd.DataFrame,
     figure_dir: Path = Path("figures"),
+    sweep: pd.DataFrame | None = None,
 ) -> list[Path]:
     """Write absolute comparison figures and compact ratio figures."""
     figure_dir.mkdir(parents=True, exist_ok=True)
@@ -213,6 +239,9 @@ def write_figures(
     backend_wide = write_backend_wide_facet_overview(summary, figure_dir)
     if backend_wide is not None:
         paths.append(backend_wide)
+    row_scaling = write_row_scaling_figure(sweep, figure_dir)
+    if row_scaling is not None:
+        paths.append(row_scaling)
     profiles = write_profile_figure(all_profiles, figure_dir)
     if profiles is not None:
         paths.append(profiles)
@@ -1172,6 +1201,8 @@ def update_readme(  # noqa: PLR0913
     environment: dict[str, Any] | None = None,
     encodings: pd.DataFrame | None = None,
     floor: pd.DataFrame | None = None,
+    sweep: pd.DataFrame | None = None,
+    scaling: pd.DataFrame | None = None,
 ) -> None:
     """Insert the latest benchmark results and setup into the README.
 
@@ -1184,6 +1215,8 @@ def update_readme(  # noqa: PLR0913
         figure_paths=figure_paths,
         encodings=encodings,
         floor=floor,
+        sweep=sweep,
+        scaling=scaling,
     )
     text = _replace_block(text, RESULTS_START, RESULTS_END, results, append=True)
     setup = "\n".join(render_setup_section(summary, environment))
@@ -1208,12 +1241,14 @@ def _replace_block(
     return text.rstrip() + "\n\n" + block + "\n" if append else text
 
 
-def render_results_section(
+def render_results_section(  # noqa: PLR0913
     *,
     summary: pd.DataFrame,
     figure_paths: list[Path],
     encodings: pd.DataFrame | None = None,
     floor: pd.DataFrame | None = None,
+    sweep: pd.DataFrame | None = None,
+    scaling: pd.DataFrame | None = None,
 ) -> str:
     """Render the Markdown summary and results for the README."""
     all_profiles = summary
@@ -1221,7 +1256,7 @@ def render_results_section(
     max_dimension = int(summary["dimensions"].max())
     lines = [
         *summary_section(all_profiles),
-        *_blank_before(real_world_section(all_profiles)),
+        *_blank_before(real_world_section(all_profiles, scaling)),
         "",
         "## Results",
         "",
@@ -1307,6 +1342,18 @@ def render_results_section(
         if filename == "combined_facet_overview.png":
             lines.extend(["", REFERENCE_NOTE])
 
+    row_figure = figures.get("row_scaling.png")
+    if row_figure is not None and not row_scaling_table(sweep).empty:
+        figure_number += 1
+    lines.extend(
+        _blank_before(
+            row_scaling_section(
+                sweep,
+                row_figure if not row_scaling_table(sweep).empty else None,
+                figure_number,
+            )
+        )
+    )
     lines.extend(_encoding_lines(all_profiles, encodings))
     lines.extend(
         _appendix_lines(
@@ -1921,9 +1968,12 @@ def floor_section(summary: pd.DataFrame, floor: pd.DataFrame | None) -> list[str
         "",
         (
             f"A NumPy `.npy` file loads into memory in {_short_time(float(matrix))} "
-            f"at {int(largest):,} features. This is the floor, because no format "
-            "can be faster than a memory copy. Each cell divides the time of a "
-            "layout by the time of the floor, so 1x is as fast as the floor."
+            f"at {int(largest):,} features. For matrix materialization this is a "
+            "floor, because no format can be faster than a memory copy. For "
+            "random rows and feature projection it is a baseline, not a floor. A "
+            "row-major file is a poor layout for reading a few columns, so a value "
+            "below 1x is possible. Each cell divides the time of a layout by the "
+            "time of the plain file, so 1x is as fast as the plain file."
         ),
         "",
         *lines,
@@ -1994,6 +2044,166 @@ def _access_path_note(summary: pd.DataFrame) -> str | None:
     )
 
 
+ROW_SCALING_OPERATIONS = [
+    ("matrix_materialization", "Matrix Materialization"),
+    ("random_rows", "Random Rows"),
+    ("feature_projection", "Feature Projection"),
+]
+
+
+def row_scaling_table(sweep: pd.DataFrame | None) -> pd.DataFrame:
+    """Return how each layout's time grows from the fewest to the most rows."""
+    if sweep is None or sweep.empty:
+        return pd.DataFrame()
+    data = default_profile(sweep)
+    counts = sorted(data["rows"].unique())
+    if len(counts) < 2:  # noqa: PLR2004
+        return pd.DataFrame()
+    low, high = counts[0], counts[-1]
+    rows = []
+    for (backend, layout), group in _ordered_groups(data):
+        at_low, at_high = group[group["rows"] == low], group[group["rows"] == high]
+        if at_low.empty or at_high.empty:
+            continue
+        row: dict[str, Any] = {
+            "backend": backend,
+            "layout": layout,
+            "rows_low": int(low),
+            "rows_high": int(high),
+            "row_growth": float(high) / float(low),
+            "dimensions": int(group["dimensions"].iloc[0]),
+        }
+        for operation, _ in ROW_SCALING_OPERATIONS:
+            before = at_low[at_low["operation"] == operation]["median_seconds"]
+            after = at_high[at_high["operation"] == operation]["median_seconds"]
+            row[operation] = (
+                float(after.iloc[0]) / float(before.iloc[0])
+                if not before.empty and not after.empty
+                else float("nan")
+            )
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _row_limits_note(sweep: pd.DataFrame) -> str | None:
+    """Name the backends that were measured only up to fewer rows."""
+    data = default_profile(sweep)
+    top = data["rows"].max()
+    notes = []
+    for backend in _ordered_backends(data["backend"].unique()):
+        largest = data[data["backend"] == backend]["rows"].max()
+        if largest < top:
+            notes.append(f"{_named(backend)} was measured only up to {largest:,} rows.")
+    return " ".join(notes) if notes else None
+
+
+def row_scaling_section(
+    sweep: pd.DataFrame | None,
+    figure: Path | None = None,
+    number: int = 0,
+) -> list[str]:
+    """Return the section on how time grows with the number of rows."""
+    table = row_scaling_table(sweep)
+    if table.empty or sweep is None:
+        return []
+    first = table.iloc[0]
+    growth = f"{first['row_growth']:,.0f}"
+    lines = [
+        "### Scaling with row count",
+        "",
+        (
+            f"The row count grows {growth}x, from {first['rows_low']:,} to "
+            f"{first['rows_high']:,} rows, at {first['dimensions']:,} features. Each "
+            f"cell divides the time at {first['rows_high']:,} rows by the time at "
+            f"{first['rows_low']:,} rows. Time that grows {growth}x is linear in the "
+            "row count. A smaller value means the time grew more slowly than the "
+            "rows."
+        ),
+    ]
+    if figure is not None:
+        lines.extend(
+            [
+                "",
+                f"![Time against row count for each layout]({figure.as_posix()})",
+                "",
+                f"Figure {number}. Median time against row count. Both axes use a "
+                "log scale.",
+            ]
+        )
+    body = [
+        "| Layout | Matrix materialization | Random rows | Feature projection |",
+        "| ------ | ---------------------- | ----------- | ------------------ |",
+    ]
+    for row in table.to_dict("records"):
+        cells = [
+            "n/a" if np.isnan(row[name]) else f"{_multiplier(row[name])}x"
+            for name, _ in ROW_SCALING_OPERATIONS
+        ]
+        body.append(
+            f"| {_layout_name(row['backend'], row['layout'])} | "
+            + " | ".join(cells)
+            + " |"
+        )
+    lines.extend(["", *body])
+    note = _row_limits_note(sweep)
+    if note:
+        lines.extend(["", note])
+    return lines
+
+
+def write_row_scaling_figure(
+    sweep: pd.DataFrame | None,
+    figure_dir: Path = Path("figures"),
+) -> Path | None:
+    """Plot median time against row count for each layout."""
+    if sweep is None or sweep.empty:
+        return None
+    data = default_profile(sweep)
+    if data["rows"].nunique() < 2:  # noqa: PLR2004
+        return None
+    figure_dir.mkdir(parents=True, exist_ok=True)
+    fig, axes = plt.subplots(
+        1, len(ROW_SCALING_OPERATIONS), figsize=(13, 4.4), squeeze=False
+    )
+    labels: list[tuple[str, str]] = []
+    for ax, (operation, title) in zip(
+        axes.ravel(), ROW_SCALING_OPERATIONS, strict=True
+    ):
+        for label, group in _ordered_groups(data):
+            points = group[group["operation"] == operation].sort_values("rows")
+            if points.empty:
+                continue
+            ax.plot(
+                points["rows"],
+                points["median_seconds"],
+                marker="o",
+                markersize=4.5,
+                linewidth=1.7,
+                linestyle=_series_linestyle(label),
+                color=_series_color(label),
+            )
+            if label not in labels:
+                labels.append(label)
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_title(_direction_title(title, better="lower"))
+        ax.set_xlabel("Rows")
+        ax.set_ylabel("Median seconds")
+        ax.grid(True, alpha=0.25)
+    columns = min(5, max(len(labels), 1))
+    fig.legend(
+        handles=[_series_legend_handle(label) for label in labels],
+        loc="lower center",
+        ncols=columns,
+        fontsize="small",
+    )
+    fig.tight_layout(rect=(0, 0.02 + 0.05 * -(-len(labels) // columns), 1, 1))
+    path = figure_dir / "row_scaling.png"
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+    return path
+
+
 def _blank_before(lines: list[str]) -> list[str]:
     """Return a blank line and the lines, or nothing when there are no lines."""
     return ["", *lines] if lines else []
@@ -2014,16 +2224,50 @@ def _duration(seconds: float) -> str:
 
 
 def _dollars(amount: float) -> str:
-    """Format dollars with cents below ten dollars."""
+    """Format dollars: four decimals below a cent, cents below ten dollars."""
+    if amount < 0.01:  # noqa: PLR2004
+        return f"${amount:.4f}"
     return f"${amount:.2f}" if amount < 10 else f"${amount:,.0f}"  # noqa: PLR2004
 
 
-def real_world_table(summary: pd.DataFrame) -> pd.DataFrame:
+def _bytes_text(size: float) -> str:
+    """Format bytes as gigabytes, megabytes, or kilobytes."""
+    if size >= 1e8:  # noqa: PLR2004
+        return f"{_two_digits(size / 1e9)} GB"
+    if size >= 1e6:  # noqa: PLR2004
+        return f"{_two_digits(size / 1e6)} MB"
+    return f"{_two_digits(size / 1e3)} KB"
+
+
+def _streamed_bytes(total_bytes: float, features: int) -> float:
+    """Estimate the bytes of 8 features of a Parquet wide file, footer included."""
+    footer = PARQUET_FOOTER_BYTES_PER_COLUMN * (features + 3)
+    return (total_bytes - footer) * EXAMPLE_STREAM_FEATURES / features + footer
+
+
+def _measured_lookup(
+    scaling: pd.DataFrame | None,
+) -> dict[tuple[str, str, str], dict[str, Any]]:
+    """Return the scaling-check rows by backend, layout, and profile."""
+    if scaling is None or scaling.empty:
+        return {}
+    return {
+        (row["backend"], row["layout"], row["profile"]): row
+        for row in scaling.to_dict("records")
+    }
+
+
+def real_world_table(
+    summary: pd.DataFrame,
+    scaling: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """Scale the benchmark to a 1.5 GB CSV wide file.
 
     Sizes scale by each layout's size relative to CSV wide. Read times scale
     linearly with the size. Download time and egress cost follow from the size.
+    Layouts in the scaling check use the measured size and read time instead.
     """
+    measured = _measured_lookup(scaling)
     if "profile" not in summary.columns:
         summary = summary.assign(profile="default")
     top = summary[summary["dimensions"] == summary["dimensions"].max()]
@@ -2054,18 +2298,64 @@ def real_world_table(summary: pd.DataFrame) -> pd.DataFrame:
         )
         if size is None or read is None:
             continue
-        size_gb = size / baseline_bytes * EXAMPLE_DATASET_GB
+        scaled_size_gb = size / baseline_bytes * EXAMPLE_DATASET_GB
+        scaled_read = read * factor
+        real = measured.get((backend, layout, profile))
+        size_gb = real["size_bytes"] / 1e9 if real else scaled_size_gb
+        read_seconds = real["matrix_seconds"] if real else scaled_read
         download = size_gb * 1000 / EXAMPLE_DOWNLOAD_MB_PER_SECOND
         records.append(
             {
                 "backend": backend,
                 "layout": layout,
                 "profile": profile,
+                "variant": "",
+                "measured": real is not None,
+                "measured_rows": float(real["rows"]) if real else float("nan"),
+                "footer_bytes": float("nan"),
+                "scaled_size_gb": scaled_size_gb,
+                "scaled_read_seconds": scaled_read,
                 "rows_per_file": rows_per_file,
                 "size_gb": size_gb,
                 "download_seconds": download,
-                "read_seconds": read * factor,
-                "total_seconds": download + read * factor,
+                "read_seconds": read_seconds,
+                "total_seconds": download + read_seconds,
+                "egress_dollars": size_gb * EXAMPLE_EGRESS_DOLLARS_PER_GB,
+            }
+        )
+    wide = next(
+        (
+            row
+            for row in records
+            if (row["backend"], row["layout"], row["profile"])
+            == ("parquet", "wide", "default")
+        ),
+        None,
+    )
+    projection = value(
+        "parquet", "wide", "default", "feature_projection", "median_seconds"
+    )
+    if wide is not None and projection is not None:
+        features = int(top["dimensions"].max())
+        real = measured.get(("parquet", "wide", "default"), {})
+        real_bytes = real.get("bytes_8_features")
+        has_bytes = real_bytes is not None and not pd.isna(real_bytes)
+        size_gb = (
+            float(real_bytes) / 1e9
+            if has_bytes
+            else _streamed_bytes(wide["size_gb"] * 1e9, features) / 1e9
+        )
+        download = size_gb * 1000 / EXAMPLE_DOWNLOAD_MB_PER_SECOND
+        records.append(
+            {
+                **wide,
+                "variant": "streamed",
+                "measured": bool(has_bytes),
+                "footer_bytes": float(real.get("footer_bytes", float("nan"))),
+                "size_gb": size_gb,
+                "download_seconds": download,
+                "read_seconds": projection * factor,
+                "total_seconds": download + projection * factor,
                 "egress_dollars": size_gb * EXAMPLE_EGRESS_DOLLARS_PER_GB,
             }
         )
@@ -2077,12 +2367,188 @@ def real_world_table(summary: pd.DataFrame) -> pd.DataFrame:
     table["egress_saved_dollars"] = (
         first["egress_dollars"] - table["egress_dollars"]
     ) * EXAMPLE_USES
+    csv_projection = value(
+        "csv", "wide", "default", "feature_projection", "median_seconds"
+    )
+    if csv_projection is not None:
+        # CSV downloads the whole file but reads only the features that are needed.
+        csv_total = first["download_seconds"] + csv_projection * factor
+        streamed = table["variant"] == "streamed"
+        table.loc[streamed, "time_saved_seconds"] = (
+            csv_total - table.loc[streamed, "total_seconds"]
+        ) * EXAMPLE_USES
     return table
 
 
 def _example_name(row: dict[str, Any]) -> str:
     name = _layout_name(row["backend"], row["layout"])
+    if row.get("variant") == "streamed":
+        return f"{name} ({EXAMPLE_STREAM_FEATURES} features streamed)"
     return f"{name} (compact)" if row["profile"] == "compact" else name
+
+
+def _record(
+    records: list[dict[str, Any]], layout: str, profile: str = "default"
+) -> dict[str, Any] | None:
+    """Return the Parquet record for a layout and profile, if it exists."""
+    for row in records:
+        if row.get("variant") == "streamed":
+            continue
+        if (row["backend"], row["layout"], row["profile"]) == (
+            "parquet",
+            layout,
+            profile,
+        ):
+            return row
+    return None
+
+
+def _smaller(size_gb: float, baseline_gb: float) -> str:
+    return f"{round((1 - size_gb / baseline_gb) * 100)}% smaller"
+
+
+def _parquet_size_paragraph(records: list[dict[str, Any]]) -> str | None:
+    """State how large the Parquet file is, and how much smaller than CSV."""
+    baseline = records[0]
+    array = _record(records, "fixed_array")
+    if array is None:
+        return None
+    base_gb = baseline["size_gb"]
+    text = (
+        f"**Size as Parquet.** The same data takes {_two_digits(array['size_gb'])} "
+        "GB as a Parquet file with the array layout, "
+        f"{_smaller(array['size_gb'], base_gb)} than the "
+        f"{_two_digits(base_gb)} GB CSV wide file."
+    )
+    compact = _record(records, "fixed_array", "compact")
+    if compact is not None:
+        text += (
+            f" With compact settings it takes {_two_digits(compact['size_gb'])} "
+            f"GB, {_smaller(compact['size_gb'], base_gb)}."
+        )
+    wide = _record(records, "wide")
+    if wide is not None:
+        text += (
+            f" As a Parquet wide file it takes {_two_digits(wide['size_gb'])} GB, "
+            f"{_smaller(wide['size_gb'], base_gb)}."
+        )
+    return text
+
+
+def _streamed_savings_note(records: list[dict[str, Any]]) -> str | None:
+    """Explain what the streamed row is compared with in the savings table."""
+    if not any(row.get("variant") == "streamed" for row in records):
+        return None
+    return (
+        "The streamed row compares with CSV wide, which downloads the whole file "
+        f"and reads only {EXAMPLE_STREAM_FEATURES} features."
+    )
+
+
+def _streamed_note(records: list[dict[str, Any]]) -> str | None:
+    """Explain that the streamed row answers a narrower question."""
+    if not any(row.get("variant") == "streamed" for row in records):
+        return None
+    return (
+        f"The streamed row is for a user who needs only {EXAMPLE_STREAM_FEATURES} "
+        "features. The other rows download and read the whole file."
+    )
+
+
+def _footer_sentence(streamed: dict[str, Any] | None, measured: bool) -> str:
+    """Say where the footer size in the streaming estimate comes from."""
+    if measured and streamed is not None:
+        return f"The footer is {_bytes_text(streamed['footer_bytes'])} (measured)."
+    return (
+        "The estimate adds the footer, which is about "
+        f"{PARQUET_FOOTER_BYTES_PER_COLUMN} bytes for each column."
+    )
+
+
+def _streaming_lines(records: list[dict[str, Any]], features: int) -> list[str]:
+    """Explain and quantify reading only part of a Parquet file from cloud storage."""
+    wide = _record(records, "wide")
+    array = _record(records, "fixed_array")
+    if wide is None and array is None:
+        return []
+    baseline = records[0]
+    rows_per_file = baseline["rows_per_file"]
+    columns = ["CSV wide"]
+    everything = [_bytes_text(baseline["size_gb"] * 1e9)]
+    selected_features = [everything[0]]
+    selected_rows = [everything[0]]
+    wide_bytes = None
+    streamed = next((row for row in records if row.get("variant") == "streamed"), None)
+    measured_bytes = bool(streamed and streamed.get("measured"))
+    if wide is not None:
+        columns.append("Parquet wide")
+        total = wide["size_gb"] * 1e9
+        wide_bytes = (
+            streamed["size_gb"] * 1e9
+            if measured_bytes and streamed is not None
+            else _streamed_bytes(total, features)
+        )
+        label = "measured" if measured_bytes else "estimate"
+        everything.append(_bytes_text(total))
+        selected_features.append(f"{_bytes_text(wide_bytes)} ({label})")
+        selected_rows.append(
+            f"{_bytes_text(total * EXAMPLE_STREAM_ROWS / rows_per_file)} (estimate)"
+        )
+    if array is not None:
+        columns.append("Parquet `fixed_array`")
+        total = array["size_gb"] * 1e9
+        everything.append(_bytes_text(total))
+        selected_features.append(_bytes_text(total))
+        selected_rows.append(
+            f"{_bytes_text(total * EXAMPLE_STREAM_ROWS / rows_per_file)} (estimate)"
+        )
+    table = [
+        "| What you read | " + " | ".join(columns) + " |",
+        "| " + " | ".join(["-" * 13, *("-" * len(name) for name in columns)]) + " |",
+        "| Everything | " + " | ".join(everything) + " |",
+        f"| {EXAMPLE_STREAM_FEATURES} features of {features:,} | "
+        + " | ".join(selected_features)
+        + " |",
+        f"| {EXAMPLE_STREAM_ROWS:,} rows | " + " | ".join(selected_rows) + " |",
+    ]
+    lines = [
+        "### Streaming a Parquet file",
+        "",
+        (
+            "Parquet stores a footer that lists where every column and row group "
+            "is. A client can read the footer and then request only the byte "
+            "ranges it needs from cloud storage. Egress is billed for the bytes "
+            "that are sent, so a partial read costs less than a full download. "
+            "A CSV file cannot be read in part by column, because every row holds "
+            "every column."
+        ),
+        "",
+        (
+            "The wide layout can skip features. The array layout stores all "
+            "features of a row in one column, so it cannot. Row selection saves "
+            "egress only when the file has several row groups and the rows you "
+            "need are together. These files use one row group, so the row "
+            "numbers below assume row groups of about "
+            f"{EXAMPLE_STREAM_ROWS:,} rows."
+        ),
+        "",
+        *table,
+    ]
+    if wide_bytes is not None:
+        lines.extend(
+            [
+                "",
+                (
+                    f"Reading {EXAMPLE_STREAM_FEATURES} features from Parquet wide "
+                    f"sends {_bytes_text(wide_bytes)}, which costs "
+                    f"{_dollars(wide_bytes / 1e9 * EXAMPLE_EGRESS_DOLLARS_PER_GB)} "
+                    "in egress, against "
+                    f"{_dollars(baseline['egress_dollars'])} for the CSV file. "
+                    f"{_footer_sentence(streamed, measured_bytes)}"
+                ),
+            ]
+        )
+    return lines
 
 
 def _example_takeaway(records: list[dict[str, Any]]) -> str | None:
@@ -2108,9 +2574,62 @@ def _example_takeaway(records: list[dict[str, Any]]) -> str | None:
     )
 
 
-def real_world_section(summary: pd.DataFrame) -> list[str]:
+def _scaling_assumption(records: list[dict[str, Any]]) -> str:
+    """State whether sizes and read times were measured or scaled."""
+    measured = [
+        row for row in records if row.get("measured") and not row.get("variant")
+    ]
+    if measured:
+        rows_text = f"{round(measured[0]['measured_rows'], -2):,.0f}"
+        return (
+            "- Sizes and read times of the layouts in the scaling check were "
+            f"measured on a real file of about {rows_text} rows. Other rows are "
+            "scaled from the benchmark data by size."
+        )
+    return (
+        "- Sizes and read times scale linearly from the benchmark data. The "
+        "benchmark does not measure files above 65 MB."
+    )
+
+
+def _scaling_check_lines(records: list[dict[str, Any]]) -> list[str]:
+    """Compare the scaled prediction with the measured file, layout by layout."""
+    measured = [
+        row for row in records if row.get("measured") and not row.get("variant")
+    ]
+    if not measured:
+        return []
+    rows_text = f"{round(measured[0]['measured_rows'], -2):,.0f}"
+    lines = [
+        "| Layout | Scaled size | Measured size | Scaled read | Measured read |",
+        "| ------ | ----------- | ------------- | ----------- | ------------- |",
+    ]
+    for row in measured:
+        lines.append(
+            f"| {_example_name(row)} | {_bytes_text(row['scaled_size_gb'] * 1e9)} "
+            f"| {_bytes_text(row['size_gb'] * 1e9)} "
+            f"| {_duration(row['scaled_read_seconds'])} "
+            f"| {_duration(row['read_seconds'])} |"
+        )
+    return [
+        "### Scaling check",
+        "",
+        (
+            f"The benchmark data is small, so we wrote and read files of about "
+            f"{rows_text} rows to check the scaled numbers. The tables above use "
+            "the measured size and read time for these layouts."
+        ),
+        "",
+        *lines,
+    ]
+
+
+def real_world_section(
+    summary: pd.DataFrame,
+    scaling: pd.DataFrame | None = None,
+) -> list[str]:
     """Return the real-world example: time and egress for a 1.5 GB CSV wide file."""
-    table = real_world_table(summary)
+    table = real_world_table(summary, scaling)
     if table.empty:
         return []
     records = table.to_dict("records")
@@ -2120,7 +2639,7 @@ def real_world_section(summary: pd.DataFrame) -> list[str]:
         "| Layout | Size | Download | Read into memory | Total time | Egress cost |",
         "| ------ | ---- | -------- | ---------------- | ---------- | ----------- |",
         *(
-            f"| {_example_name(row)} | {_two_digits(row['size_gb'])} GB "
+            f"| {_example_name(row)} | {_bytes_text(row['size_gb'] * 1e9)} "
             f"| {_duration(row['download_seconds'])} "
             f"| {_duration(row['read_seconds'])} "
             f"| {_duration(row['total_seconds'])} "
@@ -2141,18 +2660,51 @@ def real_world_section(summary: pd.DataFrame) -> list[str]:
         "## Real-world example",
         "",
         (
-            "Egress is the fee that a cloud provider charges when data leaves its "
-            "network. This example asks what it costs to move and read a "
+            "**What egress is.** Cloud providers charge for storing a file and, "
+            "separately, for data that leaves their network. The second charge is "
+            "called egress. It applies each time someone downloads a file from "
+            "cloud storage to a computer outside the provider's network, and it is "
+            "billed per gigabyte."
+        ),
+        "",
+        (
+            "**Why it matters for hosting a dataset.** A team that shares a "
+            "dataset pays egress each time someone downloads it. The bill grows "
+            "with the number of users and with the file size, and it keeps "
+            "growing after the dataset stops changing. A smaller file lowers the "
+            "bill in direct proportion. Some providers offer a requester-pays "
+            "option, where the person who downloads pays instead of the host."
+        ),
+        "",
+        (
+            "**Why it matters for using a dataset.** A researcher who works on a "
+            "laptop or in another cloud waits for every download, and pays the "
+            "fee when the host does not. The wait starts again each time the data "
+            "is read into memory. File size sets the download time. The format "
+            "sets the read time."
+        ),
+        "",
+        (
+            "**The egress costs here are an estimate.** They use one list price to "
+            "show the size of the effect on a single example. Prices differ by "
+            "provider, region, storage service, and volume, and they change over "
+            "time."
+        ),
+        "",
+        (
+            "This example asks what it costs to move and read a "
             f"{EXAMPLE_DATASET_GB:g} GB CSV wide file, and how much the other "
             f"layouts save. The file holds about {rows_text} rows of "
             f"{features:,} features. A use is one download followed by one read "
             "into memory."
         ),
         *_optional_paragraph(_example_takeaway(records)),
+        *_optional_paragraph(_parquet_size_paragraph(records)),
         "",
         "### One use",
         "",
         *one_use,
+        *_optional_paragraph(_streamed_note(records)),
         "",
         f"### Savings over {EXAMPLE_USES:,} uses",
         "",
@@ -2162,6 +2714,15 @@ def real_world_section(summary: pd.DataFrame) -> list[str]:
         ),
         "",
         *savings,
+        *_optional_paragraph(_streamed_savings_note(records)),
+        *_blank_before(_streaming_lines(records, features)),
+        *_blank_before(_scaling_check_lines(records)),
+        "",
+        "Egress pricing pages:",
+        "",
+        *(f"- [{name}]({url}): {note}" for name, url, note in EGRESS_PRICING_PAGES),
+        "",
+        "Check the current page before you plan a budget.",
         "",
         "Assumptions:",
         "",
@@ -2173,10 +2734,7 @@ def real_world_section(summary: pd.DataFrame) -> list[str]:
             "The first 100 GB each month is free on AWS. The table ignores this, "
             "so it overstates the cost at low volume."
         ),
-        (
-            "- Sizes and read times scale linearly from the benchmark data. The "
-            "benchmark does not measure files above 65 MB."
-        ),
+        _scaling_assumption(records),
         (
             "- Read times use one thread and warm caches, except for Lance and "
             "Vortex. See Limitations."

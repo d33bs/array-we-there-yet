@@ -57,3 +57,18 @@ def test_describe_encoding_sees_gzip_csv(tmp_path: Path) -> None:
     pd.DataFrame({"a": [1]}).to_csv(directory / "data.csv.gz", compression="gzip")
 
     assert "gzip" in describe_encoding("csv", "wide", directory)
+
+
+def test_parquet_encoding_reports_the_number_of_row_groups(tmp_path: Path) -> None:
+    """Row groups decide whether row selection can skip any data."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    table = pa.table({"feature_0000": [float(i) for i in range(300)]})
+    one = tmp_path / "one.parquet"
+    several = tmp_path / "several.parquet"
+    pq.write_table(table, one)
+    pq.write_table(table, several, row_group_size=100)
+
+    assert "1 row group" in describe_encoding("parquet", "wide", one)
+    assert "3 row groups" in describe_encoding("parquet", "wide", several)

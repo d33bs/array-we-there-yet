@@ -137,7 +137,7 @@ def test_real_world_section_states_its_assumptions_and_sources() -> None:
     """A reader can see every assumption and where the price comes from."""
     text = "\n".join(real_world_section(_summary()))
 
-    assert "Egress is the fee that a cloud provider charges" in text
+    assert "**What egress is.**" in text
     assert "about 16,000 rows of 8,192 features" in text
     assert "100 MB/s" in text
     assert "$0.09 per GB" in text
@@ -156,3 +156,220 @@ def test_results_section_puts_the_example_after_the_summary() -> None:
         < section.index("## Real-world example")
         < section.index("## Results")
     )
+
+
+def test_real_world_section_defines_egress_before_the_example() -> None:
+    """Egress is defined first, in plain words, with a price unit."""
+    text = "\n".join(real_world_section(_summary()))
+
+    definition = text.index("**What egress is.**")
+    scenario = text.index("This example asks")
+    assert definition < scenario
+    assert (
+        "Cloud providers charge for storing a file and, separately, for data that "
+        "leaves their network. The second charge is called egress."
+    ) in text
+    assert "billed per gigabyte" in text
+
+
+def test_real_world_section_explains_why_egress_matters_to_hosts_and_users() -> None:
+    """One paragraph is for whoever hosts a dataset and one for whoever uses it."""
+    text = "\n".join(real_world_section(_summary()))
+
+    assert "**Why it matters for hosting a dataset.**" in text
+    assert "**Why it matters for using a dataset.**" in text
+    assert "grows with the number of users and with the file size" in text
+    assert "requester-pays" in text
+    assert "File size sets the download time. The format sets the read time." in text
+    hosting = text.index("**Why it matters for hosting a dataset.**")
+    using = text.index("**Why it matters for using a dataset.**")
+    assert (
+        text.index("**What egress is.**") < hosting < using < text.index("### One use")
+    )
+
+
+def _summary_with_wide() -> pd.DataFrame:
+    """Add a Parquet wide layout of 0.8 GB, which is 100 MB in the 2,000-row data."""
+    extra = _summary()[
+        (_summary()["backend"] == "parquet") & (_summary()["profile"] == "default")
+    ].assign(layout="wide")
+    extra.loc[extra["operation"] == "write", "artifact_bytes"] = 100_000_000
+    extra.loc[extra["operation"] == "matrix_materialization", "median_seconds"] = 0.1
+    extra["artifact_bytes"] = 100_000_000
+    projection = extra[extra["operation"] == "write"].assign(
+        operation="feature_projection", median_seconds=0.002
+    )
+    csv_projection = _summary()[
+        (_summary()["backend"] == "csv")
+        & (_summary()["profile"] == "default")
+        & (_summary()["operation"] == "write")
+    ].assign(operation="feature_projection", median_seconds=0.5)
+    return pd.concat([_summary(), extra, projection, csv_projection], ignore_index=True)
+
+
+def test_section_states_the_parquet_size_and_how_much_smaller_it_is() -> None:
+    """The size of the Parquet file is stated in gigabytes and as a percentage."""
+    text = "\n".join(real_world_section(_summary()))
+
+    assert (
+        "**Size as Parquet.** The same data takes 0.6 GB as a Parquet file with the "
+        "array layout, 60% smaller than the 1.5 GB CSV wide file. With compact "
+        "settings it takes 0.48 GB, 68% smaller."
+    ) in text
+    assert text.index("**Size as Parquet.**") < text.index("### One use")
+
+
+def test_size_sentence_names_the_wide_layout_when_it_was_measured() -> None:
+    """A Parquet wide file is named too when the results include it."""
+    text = "\n".join(real_world_section(_summary_with_wide()))
+
+    assert "As a Parquet wide file it takes 0.8 GB, 47% smaller." in text
+
+
+def test_streaming_section_explains_partial_reads_in_plain_words() -> None:
+    """The section says how a client reads part of a Parquet file from the cloud."""
+    text = "\n".join(real_world_section(_summary_with_wide()))
+
+    assert "### Streaming a Parquet file" in text
+    assert (
+        "Parquet stores a footer that lists where every column and row group is."
+        in text
+    )
+    assert "request only the byte ranges it needs" in text
+    assert "Egress is billed for the bytes that are sent" in text
+    assert "A CSV file cannot be read in part by column" in text
+    assert "The array layout stores all features of a row in one column" in text
+    assert (
+        "Row selection saves egress only when the file has several row groups" in text
+    )
+
+
+def test_streaming_table_shows_bytes_for_a_partial_read() -> None:
+    """Reading 8 of 8,192 features or 1,000 rows sends a fraction of the file."""
+    text = "\n".join(real_world_section(_summary_with_wide()))
+
+    assert "| What you read | CSV wide | Parquet wide | Parquet `fixed_array` |" in text
+    assert "| Everything | 1.5 GB | 0.8 GB | 0.6 GB |" in text
+    assert "| 8 features of 8,192 | 1.5 GB | 4.9 MB (estimate) | 0.6 GB |" in text
+    assert "| 1,000 rows | 1.5 GB | 50 MB (estimate) | 38 MB (estimate) |" in text
+    assert "Reading 8 features from Parquet wide sends 4.9 MB" in text
+    assert "$0.0004" in text
+
+
+def test_streaming_table_is_absent_without_a_parquet_layout() -> None:
+    """Without Parquet results there is no streaming comparison."""
+    summary = _summary()
+    summary = summary[summary["backend"] == "csv"]
+
+    text = "\n".join(real_world_section(summary))
+
+    assert "### Streaming a Parquet file" not in text
+    assert "**Size as Parquet.**" not in text
+
+
+def test_dollars_use_four_decimals_below_one_cent() -> None:
+    """Tiny egress costs do not round to zero."""
+    assert _dollars(0.000439) == "$0.0004"
+    assert _dollars(0.0099) == "$0.0099"
+    assert _dollars(0.01) == "$0.01"
+
+
+def test_streamed_row_is_added_to_the_one_use_table() -> None:
+    """A user who needs 8 features downloads only those columns and the footer."""
+    text = "\n".join(real_world_section(_summary_with_wide()))
+
+    assert (
+        "| Parquet `wide` (8 features streamed) | 4.9 MB | 0.049 s | 0.016 s "
+        "| 0.065 s | $0.0004 |"
+    ) in text
+
+
+def test_streamed_row_is_added_to_the_savings_table() -> None:
+    """Streaming saves nearly the whole download and read for that user."""
+    text = "\n".join(real_world_section(_summary_with_wide()))
+
+    assert "| Parquet `wide` (8 features streamed) | 5.3 h | $135 |" in text
+
+
+def test_streamed_row_is_explained_under_the_table() -> None:
+    """The reader is told that the last row answers a narrower question."""
+    text = "\n".join(real_world_section(_summary_with_wide()))
+
+    assert (
+        "The streamed row is for a user who needs only 8 features. The other rows "
+        "download and read the whole file."
+    ) in text
+
+
+def test_streamed_row_needs_a_feature_projection_time() -> None:
+    """Without a measured projection time there is no streamed row."""
+    summary = _summary_with_wide()
+    summary = summary[summary["operation"] != "feature_projection"]
+
+    text = "\n".join(real_world_section(summary))
+
+    assert "8 features streamed" not in text
+    assert "The streamed row is for" not in text
+
+
+def test_streamed_saving_compares_with_csv_reading_only_8_features() -> None:
+    """CSV downloads the whole file but reads only the 8 features that are needed."""
+    text = "\n".join(real_world_section(_summary_with_wide()))
+
+    assert (
+        "The streamed row compares with CSV wide, which downloads the whole file "
+        "and reads only 8 features."
+    ) in text
+
+
+def test_streamed_saving_falls_back_to_the_whole_read_without_csv_projection() -> None:
+    """Without a CSV projection time the saving uses the whole-matrix read."""
+    summary = _summary_with_wide()
+    summary = summary[
+        ~(
+            (summary["backend"] == "csv")
+            & (summary["operation"] == "feature_projection")
+        )
+    ]
+
+    text = "\n".join(real_world_section(summary))
+
+    assert "| Parquet `wide` (8 features streamed) | 6.4 h | $135 |" in text
+
+
+def test_section_says_the_egress_cost_is_an_estimate_for_an_example() -> None:
+    """The cost figures are labeled as an example, not a quote."""
+    text = "\n".join(real_world_section(_summary()))
+
+    assert (
+        "**The egress costs here are an estimate.** They use one list price to show "
+        "the size of the effect on a single example. Prices differ by provider, "
+        "region, storage service, and volume, and they change over time."
+    ) in text
+    assert text.index("**The egress costs here are an estimate.**") < text.index(
+        "### One use"
+    )
+
+
+def test_section_links_to_the_pricing_pages_of_several_providers() -> None:
+    """A reader can check the price with each provider."""
+    text = "\n".join(real_world_section(_summary()))
+
+    assert "Egress pricing pages:" in text
+    assert (
+        "- [AWS S3](https://aws.amazon.com/s3/pricing/): the source of the "
+        "$0.09 per GB used here."
+    ) in text
+    assert (
+        "- [Google Cloud](https://cloud.google.com/vpc/network-pricing): egress "
+        "is billed per GiB and depends on the source region."
+    ) in text
+    assert (
+        "- [Azure](https://azure.microsoft.com/en-us/pricing/details/bandwidth/): "
+        "the first 100 GB each month is free, and the rate depends on the region."
+    ) in text
+    assert (
+        "- [Cloudflare R2](https://developers.cloudflare.com/r2/pricing/): no "
+        "egress charges. The host pays for storage and operations instead."
+    ) in text
+    assert "Check the current page before you plan a budget." in text

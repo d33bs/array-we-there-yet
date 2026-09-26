@@ -46,7 +46,9 @@ def _describe_parquet(layout: str, path: Path) -> str:
         column = row_group.column(index)
         if column.path_in_schema == wanted:
             encodings = ", ".join(sorted(column.encodings))
-            return f"{column.compression.lower()}; {encodings}"
+            groups = metadata.num_row_groups
+            unit = "row group" if groups == 1 else "row groups"
+            return f"{column.compression.lower()}; {encodings}; {groups} {unit}"
     return "not inspected"
 
 

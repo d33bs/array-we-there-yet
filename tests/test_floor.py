@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -46,8 +47,8 @@ def test_numpy_floor_measures_every_operation_and_cleans_up(tmp_path: Path) -> N
     records = measure_numpy_floor(
         config=config,
         dataset=dataset,
-        selected_rows=[3, 0, 9, 15],
-        selected_features=[4, 1],
+        selected_rows=np.array([3, 0, 9, 15]),
+        selected_features=np.array([4, 1]),
         timestamp="t",
         git_commit="abc",
     )
@@ -125,6 +126,15 @@ def test_floor_section_explains_the_floor_and_lists_layouts() -> None:
 
     assert text.startswith("### Distance from a plain NumPy file")
     assert "A NumPy `.npy` file loads into memory in 10 ms" in text
+    assert (
+        "For matrix materialization this is a floor, because no format can be "
+        "faster than a memory copy."
+    ) in text
+    assert (
+        "For random rows and feature projection it is a baseline, not a floor. A "
+        "row-major file is a poor layout for reading a few columns, so a value "
+        "below 1x is possible."
+    ) in text
     assert "| Parquet `wide` | 10x | 5x | 0.05x |" in text
     assert "| Parquet `fixed_array` | 5x | 4x | 2x |" in text
 

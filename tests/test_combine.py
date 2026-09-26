@@ -12,7 +12,7 @@ from array_we_there_yet.benchmark import (
     combine_runs,
     run_benchmarks,
 )
-from array_we_there_yet.main import combine, report
+from array_we_there_yet.main import _parse_inputs, combine, report
 
 
 def _raw(commit: str, seconds: float) -> pd.DataFrame:
@@ -152,3 +152,31 @@ def test_report_and_combine_rebuild_the_summary_from_raw_results(
     assert set(one["repetitions"]) == {2}
     assert set(both["repetitions"]) == {4}
     assert (tmp_path / "pooled" / "floor_summary.parquet").exists()
+
+
+def test_combine_runs_takes_the_code_version_from_the_raw_results(
+    tmp_path: Path,
+) -> None:
+    """The pooled environment names the commit that the raw results recorded."""
+    first = _run_directory(tmp_path, "a", "abc1234", 1.0)
+    second = _run_directory(tmp_path, "b", "abc1234", 1.1)
+    (first / "environment.json").write_text(
+        json.dumps({"git_commit": "abc1234-dirty", "python": "3.11"}),
+        encoding="utf-8",
+    )
+
+    combine_runs([first, second], tmp_path / "pooled")
+
+    environment = json.loads((tmp_path / "pooled" / "environment.json").read_text())
+    assert environment["git_commit"] == "abc1234"
+
+
+def test_parse_inputs_accepts_what_the_command_line_can_produce() -> None:
+    """Fire turns `a,b` into a tuple, so both text and sequences must work."""
+    expected = [Path("a"), Path("b")]
+
+    assert _parse_inputs("a,b") == expected
+    assert _parse_inputs("a, b") == expected
+    assert _parse_inputs(("a", "b")) == expected
+    assert _parse_inputs(["a", "b"]) == expected
+    assert _parse_inputs("a") == [Path("a")]

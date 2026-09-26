@@ -359,3 +359,68 @@ def test_timed_repeated_calls_the_function_and_returns_the_last_value() -> None:
     assert counter["calls"] == repeats
     assert wall >= 0
     assert cpu >= 0
+
+
+def test_csv_is_skipped_above_the_row_cap(tmp_path: Path) -> None:
+    """A CSV row cap leaves CSV out of runs with more rows than the cap."""
+    config = BenchmarkConfig(
+        rows=12,
+        dimensions=(4,),
+        measured_repetitions=1,
+        warmups=0,
+        random_row_count=2,
+        feature_projection_count=2,
+        output_dir=tmp_path / "results",
+        artifact_dir=tmp_path / "results" / "artifacts",
+        figure_dir=tmp_path / "figures",
+        csv_max_rows=11,
+    )
+
+    raw = run_benchmarks(config)
+
+    assert "csv" not in set(raw["backend"])
+    assert "parquet" in set(raw["backend"])
+
+
+def test_measure_reads_can_time_only_some_operations(tmp_path: Path) -> None:
+    """The `only` filter keeps just the named operations."""
+    config = BenchmarkConfig(
+        rows=12,
+        dimensions=(4,),
+        measured_repetitions=1,
+        warmups=0,
+        artifact_dir=tmp_path / "artifacts",
+    )
+    config.artifact_dir.mkdir()
+    dataset = make_synthetic_dataset(rows=12, dimensions=4, seed=1)
+    runner = next(
+        runner
+        for runner in layout_runners()
+        if (runner.backend, runner.layout, runner.profile)
+        == ("parquet", "wide", "default")
+    )
+    records: list[benchmark.BenchmarkResult] = []
+    artifact = benchmark._measure_writes(
+        config=config,
+        runner=runner,
+        dataset=dataset,
+        timestamp="t",
+        git_commit="c",
+        records=records,
+    )
+    records.clear()
+
+    benchmark._measure_reads(
+        config=config,
+        runner=runner,
+        dataset=dataset,
+        artifact=artifact,
+        selected_rows=np.array([1, 3]),
+        selected_features=np.array([0, 2]),
+        timestamp="t",
+        git_commit="c",
+        records=records,
+        only=frozenset({"matrix_materialization"}),
+    )
+
+    assert {record.operation for record in records} == {"matrix_materialization"}
