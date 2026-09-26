@@ -102,7 +102,9 @@ def test_scaling_check_measures_every_layout_of_the_example(tmp_path: Path) -> N
 
     table = run_scaling_check(summary=summary, output_dir=tmp_path, dataset_gb=1e-6)
 
-    measured = {(row.backend, row.layout, row.profile) for row in table.itertuples()}
+    measured = set(
+        table[["backend", "layout", "profile"]].itertuples(index=False, name=None)
+    )
     assert measured == set(EXAMPLE_LAYOUTS)
     assert (table["rows"] == len(range(10))).all()
     assert (table["size_bytes"] > 0).all()

@@ -21,6 +21,38 @@ Two earlier full runs of the old code agreed closely for reads. The median
 measurement changed by 2%. About 1 in 20 measurements changed by more than 25%.
 They were mostly write timings and timings of a few milliseconds.
 
+## Status
+
+Updated after the runs at commit `837ce54`.
+
+| Phase                        | Status      | What is left                                                                                    |
+| ---------------------------- | ----------- | ----------------------------------------------------------------------------------------------- |
+| 0: run the fixed code        | Done        | None. Two runs of commit `80a73b6`. The Lance wide numbers are now correct.                      |
+| 1: statistics                | Mostly done | The runs are pooled to 6 repetitions. Reads repeat inside each sample. TileDB writes stay noisy. |
+| 2: access path checks        | Done        | An automatic check passes for every layout. Mixed retrieval uses native row selection.           |
+| 3: scale and cache           | Partly done | The row sweep and a real 1.5 GB scaling check are done. Cold-cache runs are not.                 |
+| 4: real data                 | Not started | Needs a dataset choice and a license check.                                                      |
+| 5: baselines and outside review | Partly done | The plain NumPy file is done. More encoding profiles and maintainer reviews are not.          |
+| 6: README and reporting      | Done        | The README has a summary, a real-world example, and the review fixes.                            |
+
+**What the runs found**
+
+- The two pooled runs agreed within 2% for the median measurement. The Lance wide
+  matrix time differed between runs by 2.6 times. The report flags such
+  measurements with an asterisk.
+- The scaled sizes of the real-world example were close to a real 1.5 GB file. The
+  exception is DuckDB, whose array file was 1.8 times larger than scaled.
+- With native row selection, Lance random rows stay near 1.5 ms from 2,000 to
+  200,000 rows. Parquet with one row group does not benefit.
+
+**Still blocked, and why**
+
+- **Cold cache.** This needs a Linux machine or `sudo purge`.
+- **Real data.** This needs a dataset choice from the project owner.
+- **Outside reviews.** Opening issues on other projects speaks for the owner.
+  Draft the text, then let the owner post it.
+- **Row sweep runs.** The sweep is one run. Pool a second run before quoting it.
+
 ## Limits that shape this plan
 
 | Limit                                        | Effect on the plan                                           |

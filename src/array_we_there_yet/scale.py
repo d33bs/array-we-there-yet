@@ -199,9 +199,13 @@ def scaling_table(
 ) -> pd.DataFrame:
     """Return the measured size, write time, and read time of each layout."""
     rows = []
-    for (backend, layout, profile), group in raw.groupby(
-        ["backend", "layout", "profile"], sort=False
-    ):
+    keys = raw[["backend", "layout", "profile"]].drop_duplicates()
+    for backend, layout, profile in keys.itertuples(index=False, name=None):
+        group = raw[
+            (raw["backend"] == backend)
+            & (raw["layout"] == layout)
+            & (raw["profile"] == profile)
+        ]
         write = group[group["operation"] == "write"]
         matrix = group[group["operation"] == "matrix_materialization"]
         rows.append(

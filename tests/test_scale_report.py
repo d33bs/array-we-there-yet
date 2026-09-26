@@ -244,3 +244,67 @@ def test_streamed_row_stays_an_estimate_without_a_measurement() -> None:
 
     streamed = table[table["variant"] == "streamed"].iloc[0]
     assert bool(streamed["measured"]) is False
+
+
+def test_scaling_check_says_where_the_scaled_numbers_were_close_and_where_not() -> None:
+    """Sizes within 10% and reads within 1.5x are called close. Misses are named."""
+    text = "\n".join(real_world_section(_summary(), _scaling()))
+
+    assert (
+        "Measured sizes are within 10% of the scaled sizes, except Parquet "
+        "`fixed_array` (1.2x larger). Measured read times are within 1.5x of the "
+        "scaled times."
+    ) in text
+
+
+def test_scaling_check_names_a_read_time_miss() -> None:
+    """A layout that reads twice as slowly as scaled is named."""
+    scaling = _scaling()
+    scaling.loc[scaling["layout"] == "fixed_array", "matrix_seconds"] = 2.0
+
+    text = "\n".join(real_world_section(_summary(), scaling))
+
+    assert (
+        "Measured read times are within 1.5x of the scaled times, except Parquet "
+        "`fixed_array` (5x slower)."
+    ) in text
+
+
+def _two_layout_sweep() -> pd.DataFrame:
+    rows = []
+    for layout, growths in [
+        ("fixed_array", (120.0, 20.0, 150.0)),
+        ("wide", (30.0, 2.0, 40.0)),
+    ]:
+        for count, factor in [(2_000, 0.0), (200_000, 1.0)]:
+            for operation, growth in zip(
+                ["matrix_materialization", "random_rows", "feature_projection"],
+                growths,
+                strict=True,
+            ):
+                rows.append(
+                    {
+                        "backend": "parquet",
+                        "layout": layout,
+                        "profile": "default",
+                        "rows": count,
+                        "dimensions": 1_024,
+                        "operation": operation,
+                        "median_seconds": 1.0 if factor == 0.0 else growth,
+                        "q25_seconds": 1.0,
+                        "q75_seconds": 1.0,
+                        "artifact_bytes": 1,
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+def test_row_scaling_section_names_the_fastest_and_slowest_growth() -> None:
+    """The section says which layout grew most and least."""
+    text = "\n".join(row_scaling_section(_two_layout_sweep()))
+
+    assert (
+        "Matrix materialization grew the most in Parquet `fixed_array` (120x) and "
+        "the least in Parquet `wide` (30x). Random rows grew the most in Parquet "
+        "`fixed_array` (20x) and the least in Parquet `wide` (2x)."
+    ) in text

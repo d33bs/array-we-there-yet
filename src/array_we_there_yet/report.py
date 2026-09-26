@@ -2085,6 +2085,31 @@ def row_scaling_table(sweep: pd.DataFrame | None) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _row_scaling_highlights(table: pd.DataFrame) -> str | None:
+    """Name the layouts whose time grew the most and the least."""
+    if len(table) < 2:  # noqa: PLR2004
+        return None
+    sentences = []
+    for operation, title in ROW_SCALING_OPERATIONS[:2]:
+        values = table.dropna(subset=[operation]).sort_values(operation)
+        if len(values) < 2:  # noqa: PLR2004
+            continue
+        least, most = values.iloc[0], values.iloc[-1]
+        sentences.append(
+            f"{title} grew the most in {_layout_name(most['backend'], most['layout'])} "
+            f"({_multiplier(most[operation])}x) and the least in "
+            f"{_layout_name(least['backend'], least['layout'])} "
+            f"({_multiplier(least[operation])}x)."
+        )
+    return (
+        " ".join(sentences)
+        .replace("Random Rows", "Random rows")
+        .replace("Matrix Materialization", "Matrix materialization")
+        if sentences
+        else None
+    )
+
+
 def _row_limits_note(sweep: pd.DataFrame) -> str | None:
     """Name the backends that were measured only up to fewer rows."""
     data = default_profile(sweep)
@@ -2145,6 +2170,9 @@ def row_scaling_section(
             + " |"
         )
     lines.extend(["", *body])
+    highlights = _row_scaling_highlights(table)
+    if highlights:
+        lines.extend(["", highlights])
     note = _row_limits_note(sweep)
     if note:
         lines.extend(["", note])
@@ -2592,6 +2620,37 @@ def _scaling_assumption(records: list[dict[str, Any]]) -> str:
     )
 
 
+SCALING_SIZE_TOLERANCE = 0.10
+SCALING_READ_TOLERANCE = 1.5
+
+
+def _scaling_check_summary(measured: list[dict[str, Any]]) -> str:
+    """Say where the scaled sizes and read times were close and where they missed."""
+    size_misses = []
+    read_misses = []
+    for row in measured:
+        size_ratio = row["size_gb"] / row["scaled_size_gb"]
+        if abs(size_ratio - 1) > SCALING_SIZE_TOLERANCE:
+            word = "larger" if size_ratio > 1 else "smaller"
+            factor = size_ratio if size_ratio > 1 else 1 / size_ratio
+            size_misses.append(f"{_example_name(row)} ({_multiplier(factor)}x {word})")
+        read_ratio = row["read_seconds"] / row["scaled_read_seconds"]
+        if (
+            read_ratio > SCALING_READ_TOLERANCE
+            or read_ratio < 1 / SCALING_READ_TOLERANCE
+        ):
+            word = "slower" if read_ratio > 1 else "faster"
+            factor = read_ratio if read_ratio > 1 else 1 / read_ratio
+            read_misses.append(f"{_example_name(row)} ({_multiplier(factor)}x {word})")
+    sizes = "Measured sizes are within 10% of the scaled sizes"
+    if size_misses:
+        sizes += f", except {_join_words(size_misses)}"
+    reads = "Measured read times are within 1.5x of the scaled times"
+    if read_misses:
+        reads += f", except {_join_words(read_misses)}"
+    return f"{sizes}. {reads}."
+
+
 def _scaling_check_lines(records: list[dict[str, Any]]) -> list[str]:
     """Compare the scaled prediction with the measured file, layout by layout."""
     measured = [
@@ -2621,6 +2680,8 @@ def _scaling_check_lines(records: list[dict[str, Any]]) -> list[str]:
         ),
         "",
         *lines,
+        "",
+        _scaling_check_summary(measured),
     ]
 
 
