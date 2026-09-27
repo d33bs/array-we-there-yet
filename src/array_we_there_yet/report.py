@@ -2034,9 +2034,9 @@ def _scaling_check_lines(records: list[dict[str, Any]]) -> list[str]:
         "### Scaling check",
         "",
         (
-            f"The benchmark data is small, so we wrote and read files of about "
-            f"{rows_text} rows to check the scaled numbers. The tables above use "
-            "the measured size and read time for these layouts."
+            f"The benchmark data is small, so the scaling check wrote and read "
+            f"files of about {rows_text} rows to check the scaled numbers. The "
+            "tables above use the measured size and read time for these layouts."
         ),
         "",
         *lines,

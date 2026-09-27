@@ -1,7 +1,7 @@
 Picture a table where each row is one sample, such as a well of cells or a
 document, and each column is one number that describes it. Image-based profiling
 and embedding models make tables like this, with hundreds or thousands of
-columns. We call those numbers *features*.
+columns. These are commonly called *features*.
 
 When you save a table like this, you have a choice. You can keep one column for
 each feature, like a spreadsheet. This is often called a [**wide**](https://doi.org/10.1145/362384.362685) layout. Or you can pack
@@ -66,6 +66,6 @@ or a model, or you share data
 with other people, the results can help you pick a layout.
 
 The [fairest test](https://doi.org/10.1145/5666.5673) compares each array-like layout with the wide layout in the
-same format. We also show every layout against CSV wide, the most common way to
-share this kind of data. CSV is plain text, so those gains look bigger than they
+same format. Every layout is also shown against CSV wide, the most common way
+to share this kind of data. CSV is plain text, so those gains look bigger than they
 would against another binary format.
