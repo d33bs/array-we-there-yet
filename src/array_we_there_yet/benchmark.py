@@ -70,7 +70,6 @@ class BenchmarkConfig:
     threads: int = 1
     output_dir: Path = Path("results")
     artifact_dir: Path = Path("results/artifacts")
-    figure_dir: Path = Path("figures")
     csv_max_rows: int | None = None
 
 
@@ -684,7 +683,6 @@ def write_environment(
             **asdict(config),
             "output_dir": str(config.output_dir),
             "artifact_dir": str(config.artifact_dir),
-            "figure_dir": str(config.figure_dir),
         },
         "packages": {
             "duckdb": duckdb.__version__,
@@ -2115,7 +2113,7 @@ def _validate_artifact(
     assert_same_matrix(matrix, dataset.matrix)
 
 
-GENERATED_PATHS = ("results", "figures", "README.md")
+GENERATED_PATHS = ("results", "site", "README.md")
 
 
 def _git_commit() -> str:

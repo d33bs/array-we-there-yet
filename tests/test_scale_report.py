@@ -1,7 +1,5 @@
 """Tests for the row-sweep section and the measured real-world example."""
 
-from pathlib import Path
-
 import pandas as pd
 import pytest
 
@@ -10,7 +8,6 @@ from array_we_there_yet.report import (
     real_world_table,
     row_scaling_section,
     row_scaling_table,
-    write_row_scaling_figure,
 )
 
 LAYOUTS = [
@@ -179,17 +176,6 @@ def test_row_scaling_section_is_absent_without_a_sweep() -> None:
     """Results without a sweep get no section."""
     assert row_scaling_section(None) == []
     assert row_scaling_section(pd.DataFrame()) == []
-
-
-def test_row_scaling_figure_needs_at_least_two_row_counts(tmp_path: Path) -> None:
-    """The figure plots time against rows, and needs a range of row counts."""
-    figure = write_row_scaling_figure(_sweep(), tmp_path)
-    fewest = _sweep()["rows"].min()
-    single = write_row_scaling_figure(_sweep()[_sweep()["rows"] == fewest], tmp_path)
-
-    assert figure == tmp_path / "row_scaling.png"
-    assert figure.exists()
-    assert single is None
 
 
 def _wide_summary() -> pd.DataFrame:

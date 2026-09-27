@@ -165,7 +165,6 @@ def test_report_adds_the_row_scaling_figure_when_a_sweep_exists(
         feature_projection_count=2,
         output_dir=tmp_path / "results",
         artifact_dir=tmp_path / "results" / "artifacts",
-        figure_dir=tmp_path / "figures",
     )
     run_benchmarks(config)
     rows = []
@@ -192,8 +191,8 @@ def test_report_adds_the_row_scaling_figure_when_a_sweep_exists(
 
     report(
         output_dir=str(tmp_path / "results"),
-        figure_dir=str(tmp_path / "figures"),
-        update_readme_file=False,
+        site_dir=str(tmp_path / "site"),
     )
 
-    assert (tmp_path / "figures" / "row_scaling.png").exists()
+    page = (tmp_path / "site" / "index.html").read_text(encoding="utf-8")
+    assert 'data-figure="row_scaling"' in page

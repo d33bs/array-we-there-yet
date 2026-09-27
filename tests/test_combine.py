@@ -128,7 +128,6 @@ def test_report_and_combine_rebuild_the_summary_from_raw_results(
         feature_projection_count=2,
         output_dir=tmp_path / "one",
         artifact_dir=tmp_path / "one" / "artifacts",
-        figure_dir=tmp_path / "figures",
     )
     run_benchmarks(config)
     shutil.copytree(config.output_dir, tmp_path / "two")
@@ -136,14 +135,12 @@ def test_report_and_combine_rebuild_the_summary_from_raw_results(
 
     single = report(
         output_dir=str(config.output_dir),
-        figure_dir=str(tmp_path / "figures_one"),
-        update_readme_file=False,
+        site_dir=str(tmp_path / "site_one"),
     )
     pooled = combine(
         inputs=f"{config.output_dir},{tmp_path / 'two'}",
         output_dir=str(tmp_path / "pooled"),
-        figure_dir=str(tmp_path / "figures_pooled"),
-        update_readme_file=False,
+        site_dir=str(tmp_path / "site_pooled"),
         allow_dirty=True,
     )
 

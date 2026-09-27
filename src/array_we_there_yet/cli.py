@@ -22,8 +22,7 @@ class ArrayWeThereYetCLI:
         warmups: int = 1,
         output_dir: str = "results",
         artifact_dir: str = "results/artifacts",
-        figure_dir: str = "figures",
-        update_readme_file: bool = True,
+        site_dir: str = "site",
     ) -> dict[str, str]:
         """Run the benchmark suite."""
         return run(
@@ -33,37 +32,32 @@ class ArrayWeThereYetCLI:
             warmups=warmups,
             output_dir=output_dir,
             artifact_dir=artifact_dir,
-            figure_dir=figure_dir,
-            update_readme_file=update_readme_file,
+            site_dir=site_dir,
         )
 
     def report(
         self,
         output_dir: str = "results",
-        figure_dir: str = "figures",
-        update_readme_file: bool = True,
+        site_dir: str = "site",
     ) -> dict[str, str]:
-        """Rebuild the tables, figures, and README from saved raw results."""
+        """Rebuild the tables and the report page from saved raw results."""
         return report_results(
             output_dir=output_dir,
-            figure_dir=figure_dir,
-            update_readme_file=update_readme_file,
+            site_dir=site_dir,
         )
 
     def combine(
         self,
         inputs: str | tuple[str, ...],
         output_dir: str = "results",
-        figure_dir: str = "figures",
-        update_readme_file: bool = True,
+        site_dir: str = "site",
         allow_dirty: bool = False,
     ) -> dict[str, str]:
         """Pool runs of the same code. Give the run directories as a comma list."""
         return combine_runs_and_report(
             inputs=inputs,
             output_dir=output_dir,
-            figure_dir=figure_dir,
-            update_readme_file=update_readme_file,
+            site_dir=site_dir,
             allow_dirty=allow_dirty,
         )
 
@@ -72,29 +66,25 @@ class ArrayWeThereYetCLI:
         row_counts: str | tuple[int, ...] = "2000,20000,200000",
         dimensions: int = 1024,
         output_dir: str = "results",
-        figure_dir: str = "figures",
-        update_readme_file: bool = True,
+        site_dir: str = "site",
     ) -> dict[str, str]:
         """Run the benchmark at several row counts, then rebuild the report."""
         return run_sweep(
             row_counts=row_counts,
             dimensions=dimensions,
             output_dir=output_dir,
-            figure_dir=figure_dir,
-            update_readme_file=update_readme_file,
+            site_dir=site_dir,
         )
 
     def scaling(
         self,
         output_dir: str = "results",
-        figure_dir: str = "figures",
-        update_readme_file: bool = True,
+        site_dir: str = "site",
     ) -> dict[str, str]:
         """Write and read a real 1.5 GB CSV wide file, then rebuild the report."""
         return run_scaling(
             output_dir=output_dir,
-            figure_dir=figure_dir,
-            update_readme_file=update_readme_file,
+            site_dir=site_dir,
         )
 
 

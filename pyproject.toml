@@ -21,7 +21,7 @@ dependencies = [
   "duckdb>=1.5.5",
   "fire>=0.7",
   "jinja2>=3.1.6",
-  "matplotlib>=3.11.2",
+  "markdown-it-py>=3",
   "numpy>=2.2.6",
   "pandas>=2.2.3",
   "pyarrow>=25.0.1",
@@ -41,11 +41,6 @@ dev = [
   "pytest>=8.3.5",
   "pytest-cov>=6.2.1",
 ]
-docs = [
-  "myst-nb>=1.2",
-  "pydata-sphinx-theme>=0.16.1",
-  "sphinx>=8.2.3",
-]
 notebooks = [
   "black>=25.1",
   "isort>=6.0.1",
@@ -57,6 +52,9 @@ notebooks = [
 [tool.setuptools]
 package-dir = { "" = "src" }
 include-package-data = true
+
+[tool.setuptools.package-data]
+array_we_there_yet = [ "content/*.md", "site/*" ]
 
 [tool.setuptools.packages.find]
 where = [ "src" ]

@@ -1,10 +1,9 @@
 """Tests for the fixes from reading the page as a first-time reader."""
 
-from pathlib import Path
-
 import pandas as pd
 
 from array_we_there_yet.report import (
+    FIGURE_IDS,
     _dollars,
     _noise_note,
     _run_description,
@@ -13,8 +12,8 @@ from array_we_there_yet.report import (
     render_results_section,
     sensitivity_table_markdown,
     summary_section,
-    write_figures,
 )
+from array_we_there_yet.site import static_section
 from tests.test_real_world import _summary as _real_world_summary
 from tests.test_report import _figure_summary
 from tests.test_summary import _noisy_story, _story_summary
@@ -140,16 +139,14 @@ def test_profile_change_table_uses_signed_percentages_only() -> None:
     assert "| CSV `wide` | -57% | +25% | +330% |" in markdown
 
 
-def test_page_order_puts_plots_before_the_real_world_example(tmp_path) -> None:  # noqa: ANN001
-    """The order is summary, plots, real-world example, then detailed results."""
+def test_page_order_puts_figures_before_the_real_world_example() -> None:
+    """The order is summary, figures, real-world example, then detailed results."""
     summary = _real_world_summary()
-    paths = write_figures(summary, tmp_path)
-
-    section = render_results_section(summary=summary, figure_paths=paths)
+    section = render_results_section(summary=summary, figure_ids=FIGURE_IDS)
 
     order = [
         section.index("## Summary"),
-        section.index("## Plots"),
+        section.index("## Figures"),
         section.index("### How to read the figures"),
         section.index("## Real-world example"),
         section.index("## Detailed results"),
@@ -161,7 +158,7 @@ def test_page_order_puts_plots_before_the_real_world_example(tmp_path) -> None: 
 
 def test_compact_rows_are_explained_where_they_first_appear() -> None:
     """A reader meets `compact` in the tables, so the note sits under them."""
-    section = render_results_section(summary=_real_world_summary(), figure_paths=[])
+    section = render_results_section(summary=_real_world_summary(), figure_ids=[])
 
     note = (
         "Compact rows use the compact write profile, which writes smaller files "
@@ -187,7 +184,7 @@ def test_encoding_table_intro_says_the_sizes_are_for_a_given_row_count() -> None
     )
 
     section = render_results_section(
-        summary=summary, figure_paths=[], encodings=encodings
+        summary=summary, figure_ids=[], encodings=encodings
     )
 
     assert "Sizes are for 2,000 rows and can change with more rows." in section
@@ -196,22 +193,20 @@ def test_encoding_table_intro_says_the_sizes_are_for_a_given_row_count() -> None
 def test_every_layout_against_csv_wide_is_the_first_figure(tmp_path) -> None:  # noqa: ANN001
     """The reference comparison comes first, and its note points to the fairer one."""
     summary = _figure_summary()
-    paths = write_figures(summary, tmp_path)
+    section = render_results_section(summary=summary, figure_ids=FIGURE_IDS)
 
-    section = render_results_section(summary=summary, figure_paths=paths)
-
-    every = section.index("### Every layout against CSV wide")
-    own = section.index("### Array-like layouts against their own wide layout")
-    wide = section.index("### Wide layouts")
+    every = section.index("### Figure 1. Every layout against CSV wide")
+    own = section.index("### Figure 2. Array-like layouts against their own wide")
+    wide = section.index("### Figure 3. Wide layouts")
     assert every < own < wide
-    assert "Figure 1. Every layout divided by CSV wide" in section
+    assert "Every layout divided by CSV wide" in section
     assert "The next figure is the fairer comparison" in section
     assert "The figure before this one" not in section
 
 
 def test_figure_notes_refer_to_sections_by_name_not_by_number() -> None:
     """Renumbering a figure must not leave a wrong reference behind."""
-    section = render_results_section(summary=_real_world_summary(), figure_paths=[])
+    section = render_results_section(summary=_real_world_summary(), figure_ids=[])
 
     assert "Figure 2 shows" not in section
     assert "Figure 3 is" not in section
@@ -232,12 +227,12 @@ def test_summary_defines_the_two_operations_in_plain_words() -> None:
     )
 
 
-def test_readme_defines_both_operations_in_plain_words() -> None:
-    """The static tables use the same plain wording as the summary."""
-    readme = Path("README.md").read_text()
+def test_the_static_sections_define_both_operations_in_plain_words() -> None:
+    """The operations and terms sections use the same plain wording."""
+    operations = static_section("operations")
+    terminology = static_section("terminology")
 
-    assert "Read every value into one `N x D` NumPy array" in readme
-    assert "Read only a few chosen features and skip the rest." in readme
-    terminology = readme[readme.index("## Terminology") :]
+    assert "Read every value into one `N x D` NumPy array" in operations
+    assert "Read only a few chosen features and skip the rest." in operations
     assert "| Feature projection" in terminology
     assert "| Matrix materialization" in terminology

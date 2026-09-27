@@ -216,8 +216,9 @@ results/artifacts/
 # Per-run and per-check directories are pooled into results/ and can be regenerated.
 results_a/
 results_b/
-figures_a/
-figures_b/
+/site/
+/site_a/
+/site_b/
 results/sweep_rows_*/
 results/scaling/
 

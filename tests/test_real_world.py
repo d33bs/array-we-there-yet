@@ -4,6 +4,7 @@ import pandas as pd
 import pytest
 
 from array_we_there_yet.report import (
+    FIGURE_IDS,
     _dollars,
     _duration,
     real_world_section,
@@ -155,11 +156,11 @@ def test_real_world_section_states_its_assumptions_and_sources() -> None:
 
 def test_results_section_puts_the_example_after_the_summary() -> None:
     """The example comes after the summary and the plots, before the details."""
-    section = render_results_section(summary=_summary(), figure_paths=[])
+    section = render_results_section(summary=_summary(), figure_ids=FIGURE_IDS)
 
     assert (
         section.index("## Summary")
-        < section.index("## Plots")
+        < section.index("## Figures")
         < section.index("## Real-world example")
         < section.index("## Detailed results")
     )

@@ -39,7 +39,6 @@ def test_benchmark_runner_writes_results(tmp_path: Path) -> None:
         feature_projection_count=2,
         output_dir=tmp_path / "results",
         artifact_dir=tmp_path / "results" / "artifacts",
-        figure_dir=tmp_path / "figures",
     )
 
     raw = run_benchmarks(config)
@@ -199,7 +198,6 @@ def _small_config(
         feature_projection_count=2,
         output_dir=tmp_path / "results",
         artifact_dir=tmp_path / "results" / "artifacts",
-        figure_dir=tmp_path / "figures",
     )
 
 
@@ -313,7 +311,7 @@ def test_git_commit_marks_uncommitted_source_changes(
 def test_git_commit_ignores_files_the_benchmark_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Changed results, figures, and README do not make the code dirty."""
+    """Changed results, the site, and README do not make the code dirty."""
     monkeypatch.chdir(_repository(tmp_path))
     clean = benchmark._git_commit()
 
@@ -372,7 +370,6 @@ def test_csv_is_skipped_above_the_row_cap(tmp_path: Path) -> None:
         feature_projection_count=2,
         output_dir=tmp_path / "results",
         artifact_dir=tmp_path / "results" / "artifacts",
-        figure_dir=tmp_path / "figures",
         csv_max_rows=11,
     )
 

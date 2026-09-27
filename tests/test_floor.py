@@ -34,7 +34,6 @@ def _config(tmp_path: Path) -> BenchmarkConfig:
         feature_projection_count=2,
         output_dir=tmp_path / "results",
         artifact_dir=tmp_path / "results" / "artifacts",
-        figure_dir=tmp_path / "figures",
     )
 
 

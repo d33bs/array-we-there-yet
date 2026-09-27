@@ -1,17 +1,15 @@
 """Tests for the links and the References section of the README."""
 
 import re
-from pathlib import Path
 
 from array_we_there_yet.report import BACKEND_PACKAGES
+from array_we_there_yet.site import AFTER_SETUP, static_section
 
-README = Path("README.md").read_text()
 URL = re.compile(r"\]\((https?://[^)\s]+)\)")
 
 
 def _references() -> str:
-    start = README.index("\n## References")
-    return README[start : README.index("\n## ", start + 1)]
+    return static_section("references")
 
 
 def test_every_backend_package_links_to_its_documentation() -> None:
@@ -22,12 +20,9 @@ def test_every_backend_package_links_to_its_documentation() -> None:
 
 
 def test_references_come_after_limitations_and_before_terminology() -> None:
-    """The section sits at the end of the report, before the reference tables."""
-    assert (
-        README.index("\n## Limitations")
-        < README.index("\n## References")
-        < README.index("\n## Terminology")
-    )
+    """The section sits at the end of the report, before the terms."""
+    assert AFTER_SETUP.index("limitations") < AFTER_SETUP.index("references")
+    assert AFTER_SETUP.index("references") < AFTER_SETUP.index("terminology")
 
 
 def test_references_cover_the_formats_streaming_compression_and_method() -> None:

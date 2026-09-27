@@ -13,13 +13,9 @@ from array_we_there_yet.benchmark import (
     run_benchmarks,
     summarize_results,
 )
-from array_we_there_yet.report import (
-    update_readme,
-    write_figures,
-    write_profile_tables,
-    write_ratio_tables,
-)
+from array_we_there_yet.report import write_profile_tables, write_ratio_tables
 from array_we_there_yet.scale import run_row_sweep, run_scaling_check
+from array_we_there_yet.site import write_site
 
 
 def run(
@@ -31,10 +27,9 @@ def run(
     seed: int = 42,
     output_dir: str = "results",
     artifact_dir: str = "results/artifacts",
-    figure_dir: str = "figures",
-    update_readme_file: bool = True,
+    site_dir: str = "site",
 ) -> dict[str, str]:
-    """Run benchmarks, summarize results, generate figures, and update README."""
+    """Run benchmarks, summarize results, and build the report page."""
     config = BenchmarkConfig(
         rows=rows,
         dimensions=_parse_dimensions(dimensions),
@@ -43,23 +38,20 @@ def run(
         seed=seed,
         output_dir=Path(output_dir),
         artifact_dir=Path(artifact_dir),
-        figure_dir=Path(figure_dir),
     )
     run_benchmarks(config)
     return report(
         output_dir=output_dir,
-        figure_dir=figure_dir,
-        update_readme_file=update_readme_file,
+        site_dir=site_dir,
     )
 
 
 def report(
     *,
     output_dir: str = "results",
-    figure_dir: str = "figures",
-    update_readme_file: bool = True,
+    site_dir: str = "site",
 ) -> dict[str, str]:
-    """Rebuild the summary, tables, figures, and README from saved raw results."""
+    """Rebuild the summary, tables, and report page from saved raw results."""
     output = Path(output_dir)
     summary = summarize_results(pd.read_parquet(output / "raw_results.parquet"), output)
     sweep = _optional_table(output / "row_sweep_summary.parquet")
@@ -72,25 +64,22 @@ def report(
     )
     ratio_tables = write_ratio_tables(summary, output)
     write_profile_tables(summary, output)
-    figures = write_figures(summary, Path(figure_dir), sweep, scaling)
-    if update_readme_file:
-        update_readme(
-            readme_path=Path("README.md"),
-            summary=summary,
-            figure_paths=figures,
-            environment=json.loads(
-                (output / "environment.json").read_text(encoding="utf-8")
-            ),
-            encodings=pd.read_parquet(output / "encodings.parquet"),
-            floor=floor,
-            sweep=sweep,
-            scaling=scaling,
-        )
+    page = write_site(
+        summary=summary,
+        environment=json.loads(
+            (output / "environment.json").read_text(encoding="utf-8")
+        ),
+        encodings=pd.read_parquet(output / "encodings.parquet"),
+        floor=floor,
+        sweep=sweep,
+        scaling=scaling,
+        output_dir=Path(site_dir),
+    )
     return {
         "raw_results": str(output / "raw_results.parquet"),
         "summary": str(output / "summary.parquet"),
         "ratio_summary": str(ratio_tables[0]),
-        "figures": str(figure_dir),
+        "site": str(page),
     }
 
 
@@ -104,8 +93,7 @@ def sweep(
     row_counts: object = "2000,20000,200000",
     dimensions: int = 1024,
     output_dir: str = "results",
-    figure_dir: str = "figures",
-    update_readme_file: bool = True,
+    site_dir: str = "site",
 ) -> dict[str, str]:
     """Run the row-count sweep, then rebuild the report."""
     counts = _parse_dimensions(row_counts)
@@ -116,16 +104,14 @@ def sweep(
     )
     return report(
         output_dir=output_dir,
-        figure_dir=figure_dir,
-        update_readme_file=update_readme_file,
+        site_dir=site_dir,
     )
 
 
 def scaling(
     *,
     output_dir: str = "results",
-    figure_dir: str = "figures",
-    update_readme_file: bool = True,
+    site_dir: str = "site",
 ) -> dict[str, str]:
     """Write and read a real 1.5 GB CSV wide file, then rebuild the report."""
     output = Path(output_dir)
@@ -133,8 +119,7 @@ def scaling(
     run_scaling_check(summary=summary, output_dir=output)
     return report(
         output_dir=output_dir,
-        figure_dir=figure_dir,
-        update_readme_file=update_readme_file,
+        site_dir=site_dir,
     )
 
 
@@ -142,16 +127,14 @@ def combine(
     *,
     inputs: object,
     output_dir: str = "results",
-    figure_dir: str = "figures",
-    update_readme_file: bool = True,
+    site_dir: str = "site",
     allow_dirty: bool = False,
 ) -> dict[str, str]:
     """Pool the results of several runs of the same code, then rebuild the report."""
     combine_runs(_parse_inputs(inputs), Path(output_dir), allow_dirty=allow_dirty)
     return report(
         output_dir=output_dir,
-        figure_dir=figure_dir,
-        update_readme_file=update_readme_file,
+        site_dir=site_dir,
     )
 
 

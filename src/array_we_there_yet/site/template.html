@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }}</title>
+<meta name="description" content="A benchmark of wide and array-like storage layouts for high-dimensional profile data, across seven backends.">
+<style>
+{{ css }}
+</style>
+</head>
+<body>
+<header class="masthead">
+  <div class="wrap masthead-top">
+    <h1>{{ title }}</h1>
+    <a class="gh-link" href="{{ repo_url }}">{{ github_icon }}<span>Source on GitHub</span></a>
+  </div>
+  <div class="wrap">
+    <div class="lede">
+{{ intro }}
+    </div>
+  </div>
+</header>
+<div class="wrap">
+  <main id="report">
+{{ body }}
+  </main>
+</div>
+<footer class="site-footer">
+  <div class="wrap">
+    <a class="gh-link" href="{{ repo_url }}">{{ github_icon }}<span>View the source on GitHub</span></a>
+  </div>
+</footer>
+<script id="report-data" type="application/json">{{ data }}</script>
+<script src="{{ plotly_url }}" integrity="{{ plotly_integrity }}" crossorigin="anonymous" defer></script>
+<script>
+{{ script }}
+</script>
+</body>
+</html>

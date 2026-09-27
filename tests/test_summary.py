@@ -1,15 +1,9 @@
 """Tests for the summary, key findings, and setup sections of the README."""
 
-from pathlib import Path
-
 import pandas as pd
 import pytest
 
 from array_we_there_yet.report import (
-    RESULTS_END,
-    RESULTS_START,
-    SETUP_END,
-    SETUP_START,
     _access_path_note,
     _cpu_time_note,
     _noise_note,
@@ -21,7 +15,6 @@ from array_we_there_yet.report import (
     render_results_section,
     render_setup_section,
     summary_section,
-    update_readme,
 )
 
 OPERATIONS = [
@@ -315,56 +308,6 @@ def test_setup_section_omits_the_environment_when_unknown() -> None:
     assert headings == ["## Backends and access paths"]
 
 
-def test_update_readme_replaces_the_results_and_setup_blocks(tmp_path: Path) -> None:
-    """Both generated blocks are replaced and the text around them is kept."""
-    readme = tmp_path / "README.md"
-    readme.write_text(
-        "# Title\n\nIntro.\n\n"
-        f"{RESULTS_START}\n\nold results\n\n{RESULTS_END}\n\n"
-        "## Methodology\n\nStatic text.\n\n"
-        f"{SETUP_START}\n\nold setup\n\n{SETUP_END}\n\n"
-        "## Limitations\n",
-        encoding="utf-8",
-    )
-
-    update_readme(
-        readme_path=readme,
-        summary=_story_summary(),
-        figure_paths=[],
-        environment=_environment(),
-    )
-
-    text = readme.read_text(encoding="utf-8")
-    assert "old results" not in text
-    assert "old setup" not in text
-    assert text.index("## Summary") < text.index("## Methodology")
-    assert text.index("## Methodology") < text.index("## Environment")
-    assert text.index("## Environment") < text.index("## Limitations")
-    assert "Static text." in text
-    assert text.startswith("# Title\n\nIntro.")
-
-
-def test_update_readme_leaves_a_readme_without_setup_markers_alone(
-    tmp_path: Path,
-) -> None:
-    """A README with no setup markers gets no setup section appended."""
-    readme = tmp_path / "README.md"
-    readme.write_text(
-        f"# Title\n\n{RESULTS_START}\n\nold\n\n{RESULTS_END}\n", encoding="utf-8"
-    )
-
-    update_readme(
-        readme_path=readme,
-        summary=_story_summary(),
-        figure_paths=[],
-        environment=_environment(),
-    )
-
-    text = readme.read_text(encoding="utf-8")
-    assert "## Summary" in text
-    assert "## Environment" not in text
-
-
 def _cpu_summary() -> pd.DataFrame:
     """Return Vortex results where the array layout uses three threads."""
     rows = []
@@ -493,7 +436,7 @@ def test_environment_table_shows_when_runs_were_pooled() -> None:
 
 def test_key_findings_say_feature_projection_is_the_wide_layouts_best_case() -> None:
     """A reader learns why array layouts can lose at feature projection."""
-    section = render_results_section(summary=_story_summary(), figure_paths=[])
+    section = render_results_section(summary=_story_summary(), figure_ids=[])
 
     assert (
         "Feature projection reads 8 of 16 features, which is the best case for a "
@@ -504,7 +447,7 @@ def test_key_findings_say_feature_projection_is_the_wide_layouts_best_case() -> 
 def test_sensitivity_table_says_what_the_conclusion_column_means() -> None:
     """The label names the side of wide and does not imply an unchanged effect."""
     summary = _compact_summary()
-    section = render_results_section(summary=summary, figure_paths=[])
+    section = render_results_section(summary=summary, figure_ids=[])
 
     assert "Same side of wide" in section or "Reverses" in section
     assert "Same direction" not in section
@@ -539,7 +482,7 @@ def test_percent_change_keeps_decimals_for_almost_total_reductions() -> None:
 
 def test_key_findings_intro_explains_the_signs() -> None:
     """The intro says what a negative and a positive percentage mean."""
-    section = render_results_section(summary=_story_summary(), figure_paths=[])
+    section = render_results_section(summary=_story_summary(), figure_ids=[])
 
     assert "A negative percentage means faster or smaller." in section
     assert "A positive percentage means slower or larger." in section

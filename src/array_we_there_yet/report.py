@@ -2,20 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Collection, Iterable, Iterator, Mapping
 from pathlib import Path
-from typing import Any, Literal, TypedDict
+from typing import Any
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from matplotlib.lines import Line2D
-from matplotlib.patches import Patch
 
-RESULTS_START = "<!-- array-we-there-yet-results:start -->"
-RESULTS_END = "<!-- array-we-there-yet-results:end -->"
-SETUP_START = "<!-- array-we-there-yet-setup:start -->"
-SETUP_END = "<!-- array-we-there-yet-setup:end -->"
 SIMILAR_LOW = 0.9
 NOISY_RANGE = 0.5
 ACCESS_PATH_LIMIT = 3
@@ -71,17 +64,6 @@ THREAD_LABELS = {
     "lance": "Lance",
     "vortex": "Vortex",
 }
-Panel = tuple[str, pd.DataFrame, str, str]
-
-
-class PlotStyle(TypedDict, total=False):
-    """Line style fields shared by plot and errorbar calls."""
-
-    label: str
-    color: str | None
-    linestyle: str
-
-
 OPERATIONS = [
     "write",
     "full_read",
@@ -115,15 +97,6 @@ BACKEND_PACKAGES = {
     "vortex": "[`vortex-data`](https://docs.vortex.dev/) (`vortex` import)",
     "lance": "[`lance` Python package](https://lance.org/)",
 }
-LAYOUT_COLORS = {
-    "wide": "#4D4D4D",
-    "fixed_array": "#009E73",
-    "delimited_array": "#0072B2",
-    "json_array": "#D55E00",
-    "duckdb_array": "#CC79A7",
-    "zarr_matrix": "#56B4E9",
-    "tiledb_dense": "#E69F00",
-}
 SERIES_COLORS = {
     ("csv", "delimited_array"): "#0072B2",
     ("csv", "json_array"): "#D55E00",
@@ -143,7 +116,15 @@ SERIES_COLORS = {
 }
 KEY_COLUMNS = ["dimensions", "operation", "operation_parameter"]
 CSV_WIDE_LABEL = "CSV wide"
-GAIN_MULTIPLIER_LIMIT = 0.1
+FIGURE_IDS = (
+    "combined",
+    "backend_wide",
+    "wide_layouts",
+    "explorer",
+    "real_world",
+    "row_scaling",
+    "profiles",
+)
 LOSS_MULTIPLIER_LIMIT = 2.0
 PARALLELISM_LIMIT = 2.0
 WIDE_REFERENCE_BACKENDS = ("csv", "parquet")
@@ -225,40 +206,6 @@ def _ratios_against(
     return ratios
 
 
-def write_figures(
-    summary: pd.DataFrame,
-    figure_dir: Path = Path("figures"),
-    sweep: pd.DataFrame | None = None,
-    scaling: pd.DataFrame | None = None,
-) -> list[Path]:
-    """Write absolute comparison figures and compact ratio figures."""
-    figure_dir.mkdir(parents=True, exist_ok=True)
-    all_profiles = summary
-    summary = default_profile(summary)
-    paths: list[Path] = []
-    combined = write_combined_facet_overview(summary, figure_dir)
-    if combined is not None:
-        paths.append(combined)
-    wide_layouts = write_wide_layouts_facet_overview(summary, figure_dir)
-    if wide_layouts is not None:
-        paths.append(wide_layouts)
-    backend_wide = write_backend_wide_facet_overview(summary, figure_dir)
-    if backend_wide is not None:
-        paths.append(backend_wide)
-    row_scaling = write_row_scaling_figure(sweep, figure_dir)
-    if row_scaling is not None:
-        paths.append(row_scaling)
-    real_world = write_real_world_figure(all_profiles, scaling, figure_dir)
-    if real_world is not None:
-        paths.append(real_world)
-    profiles = write_profile_figure(all_profiles, figure_dir)
-    if profiles is not None:
-        paths.append(profiles)
-    paths.extend(write_absolute_figures(summary, figure_dir))
-    paths.extend(write_ratio_figures(summary, figure_dir))
-    return paths
-
-
 def write_ratio_tables(
     summary: pd.DataFrame,
     output_dir: Path = Path("results"),
@@ -276,177 +223,6 @@ def write_ratio_tables(
         table.to_parquet(path, index=False)
         paths.append(path)
     return paths
-
-
-def write_combined_facet_overview(
-    summary: pd.DataFrame,
-    figure_dir: Path = Path("figures"),
-) -> Path | None:
-    """Write the main faceted overview with every layout compared with CSV wide."""
-    ratios = csv_wide_ratio_table(summary)
-    if ratios.empty:
-        return None
-    baseline = f"vs {CSV_WIDE_LABEL}"
-    panels = _facet_panels(
-        ratios=_with_reference_series(ratios, backend="csv", layout="wide"),
-        baseline=baseline,
-    )
-    return _write_facet_figure(
-        panels,
-        figure_dir / "combined_facet_overview.png",
-        baseline=baseline,
-        legend_columns=4,
-    )
-
-
-def write_wide_layouts_facet_overview(
-    summary: pd.DataFrame,
-    figure_dir: Path = Path("figures"),
-) -> Path | None:
-    """Write the same facets for wide layouts only, compared with CSV wide."""
-    ratios = wide_layout_ratio_table(summary)
-    if ratios.empty:
-        return None
-    baseline = f"vs {CSV_WIDE_LABEL}"
-    panels = _facet_panels(
-        ratios=_with_reference_series(ratios, backend="csv", layout="wide"),
-        baseline=baseline,
-    )
-    return _write_facet_figure(
-        panels,
-        figure_dir / "wide_layouts_facet_overview.png",
-        baseline=baseline,
-    )
-
-
-def write_backend_wide_facet_overview(
-    summary: pd.DataFrame,
-    figure_dir: Path = Path("figures"),
-) -> Path | None:
-    """Write the same facets with each array-like layout compared with its own wide."""
-    ratios = ratio_table(summary)
-    panels = _facet_panels(ratios=ratios, baseline="array / wide")
-    return _write_facet_figure(
-        panels,
-        figure_dir / "backend_wide_facet_overview.png",
-        baseline="array / wide",
-    )
-
-
-def _facet_panels(*, ratios: pd.DataFrame, baseline: str) -> list[Panel]:
-    """Return the nine panels of a facet figure.
-
-    There is one panel for each of the seven operations, then the geometric mean
-    time and the storage size. Together they fill a three-by-three grid.
-    """
-    time_label = _ratio_axis_label("time_ratio", baseline=baseline)
-    panels: list[Panel] = []
-    for operation in OPERATIONS:
-        data = ratios[ratios["operation"] == operation]
-        if not data.empty:
-            panels.append(
-                (
-                    _direction_title(
-                        operation.replace("_", " ").title(),
-                        better="lower",
-                    ),
-                    data,
-                    "time_ratio",
-                    time_label,
-                )
-            )
-
-    time_summary = _time_summary_ratios(ratios)
-    if not time_summary.empty:
-        panels.append(
-            (
-                _direction_title("Geometric Mean Time", better="lower"),
-                time_summary,
-                "geometric_mean_time_ratio",
-                time_label,
-            )
-        )
-    storage = ratios[ratios["operation"] == "write"]
-    if not storage.empty:
-        panels.append(
-            (
-                _direction_title("Storage Size", better="lower"),
-                storage,
-                "artifact_size_ratio",
-                _ratio_axis_label("artifact_size_ratio", baseline=baseline),
-            )
-        )
-    return panels
-
-
-def _write_facet_figure(
-    panels: list[Panel],
-    path: Path,
-    *,
-    baseline: str,
-    legend_columns: int = 3,
-) -> Path | None:
-    """Draw panels on a compact grid with one shared legend."""
-    if not panels:
-        return None
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    row_count, column_count = _facet_grid_shape(len(panels))
-    fig, axes = plt.subplots(
-        row_count,
-        column_count,
-        figsize=(4.0 * column_count, 3.0 * row_count),
-        squeeze=False,
-        sharex=True,
-    )
-    for ax, (title, data, value_column, ylabel) in zip(
-        axes.ravel(),
-        panels,
-        strict=False,
-    ):
-        for label, group in _ordered_groups(data):
-            sorted_group = group.sort_values("dimensions")
-            label_text = "/".join(label)
-            _plot_with_errorbars(
-                ax,
-                sorted_group["dimensions"],
-                sorted_group[value_column],
-                style={
-                    "label": label_text,
-                    "color": _series_color(label),
-                    "linestyle": _series_linestyle(label),
-                },
-                yerr=_errorbar_interval(sorted_group, value_column),
-            )
-        ax.set_yscale("log")
-        ax.set_title(title)
-        ax.set_xlabel("Feature count")
-        ax.set_ylabel(ylabel)
-        ax.grid(True, axis="y", alpha=0.25)
-
-    for ax in axes.ravel()[len(panels) :]:
-        ax.set_axis_off()
-
-    labels = list(
-        _ordered_group_labels(
-            pd.concat([data[["backend", "layout"]] for _, data, _, _ in panels])
-        )
-    )
-    if labels:
-        legend_columns = min(legend_columns, len(labels))
-        legend_rows = -(-len(labels) // legend_columns)
-        fig.legend(
-            handles=[_series_legend_handle(label) for label in labels],
-            loc="lower center",
-            ncols=legend_columns,
-            fontsize="small",
-        )
-        fig.tight_layout(rect=(0, 0.02 + 0.025 * legend_rows, 1, 1))
-    else:
-        fig.tight_layout()
-    fig.savefig(path, dpi=160)
-    plt.close(fig)
-    return path
 
 
 def profile_comparison_table(summary: pd.DataFrame) -> pd.DataFrame:
@@ -504,107 +280,6 @@ def write_profile_tables(
     path = output_dir / "profile_comparison.parquet"
     comparison.to_parquet(path, index=False)
     return [path]
-
-
-def write_profile_figure(
-    summary: pd.DataFrame,
-    figure_dir: Path = Path("figures"),
-) -> Path | None:
-    """Plot storage size against time for the default and compact profiles.
-
-    Each arrow starts at the default result and ends at the compact result.
-    Layouts without a compact profile appear as single points.
-    """
-    if profile_comparison_table(summary).empty:
-        return None
-    largest = summary["dimensions"].max()
-    top = summary[summary["dimensions"] == largest]
-    sizes = top[top["operation"] == "write"].set_index(["backend", "layout", "profile"])
-    values = float(sizes["rows"].iloc[0]) * float(largest)
-    panels = [
-        ("matrix_materialization", "Matrix Materialization"),
-        ("write", "Write"),
-    ]
-    figure_dir.mkdir(parents=True, exist_ok=True)
-    fig, axes = plt.subplots(1, len(panels), figsize=(11, 4.8), squeeze=False)
-    handles: dict[str, object] = {}
-    for ax, (operation, title) in zip(axes.ravel(), panels, strict=True):
-        timed = top[top["operation"] == operation].set_index(
-            ["backend", "layout", "profile"]
-        )
-        for (backend, layout), _ in _ordered_groups(
-            top[["backend", "layout"]].drop_duplicates()
-        ):
-            color = _series_color((backend, layout))
-            points = {}
-            for profile in ["default", "compact"]:
-                key = (backend, layout, profile)
-                if key in timed.index and key in sizes.index:
-                    points[profile] = (
-                        float(sizes.loc[key, "artifact_bytes"]) / (values * 4),
-                        float(timed.loc[key, "median_seconds"]),
-                    )
-            for profile, point in points.items():
-                marker = ax.scatter(
-                    *point,
-                    marker="s" if layout == "wide" else "o",
-                    s=55,
-                    color=color if profile == "default" else "white",
-                    edgecolors=color,
-                    linewidths=1.6,
-                    zorder=3,
-                )
-                handles.setdefault(f"{backend}/{layout}", marker)
-            if len(points) == 2:  # noqa: PLR2004
-                ax.annotate(
-                    "",
-                    xy=points["compact"],
-                    xytext=points["default"],
-                    arrowprops={"arrowstyle": "->", "color": color, "lw": 1.4},
-                )
-        ax.set_xscale("log")
-        ax.set_yscale("log")
-        ax.set_title(_direction_title(title, better="lower"))
-        ax.set_xlabel("Storage size (x raw float32)")
-        ax.set_ylabel("Median seconds")
-        ax.grid(True, alpha=0.25)
-
-    marker_key = [
-        Line2D([], [], marker="o", linestyle="", color="black", label="default"),
-        Line2D(
-            [],
-            [],
-            marker="o",
-            linestyle="",
-            markerfacecolor="white",
-            color="black",
-            label="compact",
-        ),
-    ]
-    series = []
-    for name in handles:
-        backend, _, layout = name.partition("/")
-        series.append(
-            Line2D(
-                [],
-                [],
-                marker="s" if layout == "wide" else "o",
-                linestyle="",
-                color=_series_color((backend, layout)),
-                label=name,
-            )
-        )
-    fig.legend(
-        handles=[*series, *marker_key],
-        loc="lower center",
-        ncols=5,
-        fontsize="small",
-    )
-    fig.tight_layout(rect=(0, 0.16, 1, 1))
-    path = figure_dir / "encoding_profiles.png"
-    fig.savefig(path, dpi=160)
-    plt.close(fig)
-    return path
 
 
 SENSITIVITY_MEASURES = [
@@ -777,188 +452,6 @@ def encoding_table(encodings: pd.DataFrame, summary: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
-def write_absolute_figures(
-    summary: pd.DataFrame,
-    figure_dir: Path = Path("figures"),
-) -> list[Path]:
-    """Write side-by-side absolute comparison figures."""
-    figure_dir.mkdir(parents=True, exist_ok=True)
-    paths: list[Path] = []
-
-    for operation in OPERATIONS:
-        data = summary[summary["operation"] == operation]
-        if data.empty:
-            continue
-        path = figure_dir / f"{operation}_absolute_comparison.png"
-        _write_absolute_comparison(
-            data=data,
-            value_column="median_seconds",
-            ylabel="Median seconds",
-            title=f"{operation.replace('_', ' ').title()} Time",
-            path=path,
-        )
-        paths.append(path)
-
-    storage = summary[summary["operation"] == "write"].copy()
-    if not storage.empty:
-        storage["artifact_megabytes"] = storage["artifact_bytes"] / 1_000_000
-        path = figure_dir / "storage_size_absolute_comparison.png"
-        _write_absolute_comparison(
-            data=storage,
-            value_column="artifact_megabytes",
-            ylabel="Artifact size (MB)",
-            title="Artifact Size",
-            path=path,
-        )
-        paths.append(path)
-    return paths
-
-
-def write_ratio_figures(
-    summary: pd.DataFrame,
-    figure_dir: Path = Path("figures"),
-) -> list[Path]:
-    """Write compact ratio figures from summarized benchmark data."""
-    figure_dir.mkdir(parents=True, exist_ok=True)
-    ratios = ratio_table(summary)
-    paths: list[Path] = []
-    for operation in OPERATIONS:
-        data = ratios[ratios["operation"] == operation]
-        if data.empty:
-            continue
-        fig, ax = plt.subplots(figsize=(9, 4.8))
-        for label, group in _ordered_groups(data):
-            sorted_group = group.sort_values("dimensions")
-            _plot_with_errorbars(
-                ax,
-                sorted_group["dimensions"],
-                sorted_group["time_ratio"],
-                style={"label": "/".join(label)},
-                yerr=_errorbar_interval(sorted_group, "time_ratio"),
-            )
-        ax.axhline(1.0, color="black", linewidth=1, linestyle="--")
-        ax.set_title(f"{operation.replace('_', ' ').title()} Time Ratio")
-        ax.set_xlabel("Feature count")
-        ax.set_ylabel("array / wide")
-        ax.legend(fontsize="small", ncols=2)
-        ax.grid(True, axis="y", alpha=0.25)
-        fig.tight_layout()
-        path = figure_dir / f"{operation}_time_ratio.png"
-        fig.savefig(path, dpi=160)
-        plt.close(fig)
-        paths.append(path)
-
-    storage = ratios[ratios["operation"] == "write"]
-    if not storage.empty:
-        fig, ax = plt.subplots(figsize=(9, 4.8))
-        for label, group in _ordered_groups(storage):
-            sorted_group = group.sort_values("dimensions")
-            _plot_with_errorbars(
-                ax,
-                sorted_group["dimensions"],
-                sorted_group["artifact_size_ratio"],
-                style={"label": "/".join(label)},
-                yerr=_errorbar_interval(sorted_group, "artifact_size_ratio"),
-            )
-        ax.axhline(1.0, color="black", linewidth=1, linestyle="--")
-        ax.set_title("Artifact Size Ratio")
-        ax.set_xlabel("Feature count")
-        ax.set_ylabel("array / wide")
-        ax.legend(fontsize="small", ncols=2)
-        ax.grid(True, axis="y", alpha=0.25)
-        fig.tight_layout()
-        path = figure_dir / "storage_size_ratio.png"
-        fig.savefig(path, dpi=160)
-        plt.close(fig)
-        paths.append(path)
-    return paths
-
-
-def _write_absolute_comparison(
-    *,
-    data: pd.DataFrame,
-    value_column: str,
-    ylabel: str,
-    title: str,
-    path: Path,
-) -> None:
-    """Write one side-by-side figure with one backend per panel."""
-    backends = _ordered_backends(data["backend"].unique())
-    panel_count = len(backends)
-    fig, axes = plt.subplots(
-        1,
-        panel_count,
-        figsize=(max(6.0, 3.3 * panel_count), 4.8),
-        squeeze=False,
-        sharey=False,
-    )
-    legend_labels: list[str] = []
-    for index, backend in enumerate(backends):
-        ax = axes[0][index]
-        backend_data = data[data["backend"] == backend]
-        dimensions = sorted(backend_data["dimensions"].unique())
-        layouts = _ordered_layouts(backend_data["layout"].unique())
-        x_positions = list(range(len(dimensions)))
-        bar_width = min(0.8 / max(len(layouts), 1), 0.28)
-        center_offset = (len(layouts) - 1) * bar_width / 2
-
-        for layout_index, layout in enumerate(layouts):
-            layout_data = backend_data[backend_data["layout"] == layout]
-            values = [
-                _value_for_dimension(
-                    data=layout_data,
-                    dimension=dimension,
-                    value_column=value_column,
-                )
-                for dimension in dimensions
-            ]
-            offsets = [
-                position - center_offset + layout_index * bar_width
-                for position in x_positions
-            ]
-            bars = ax.bar(
-                offsets,
-                values,
-                width=bar_width,
-                label=layout,
-                color=LAYOUT_COLORS.get(layout),
-                yerr=_errorbar_for_dimensions(
-                    data=layout_data,
-                    dimensions=dimensions,
-                    value_column=value_column,
-                ),
-                capsize=3,
-            )
-            if bars and layout not in legend_labels:
-                legend_labels.append(layout)
-
-        ax.set_title(str(backend))
-        ax.set_xlabel("Feature count")
-        ax.set_xticks(x_positions)
-        ax.set_xticklabels([str(dimension) for dimension in dimensions])
-        ax.grid(True, axis="y", alpha=0.25)
-        if index == 0:
-            ax.set_ylabel(ylabel)
-
-    fig.suptitle(f"{title}: Wide and Array-Like Layouts")
-    if legend_labels:
-        legend_handles = [
-            Patch(
-                facecolor=LAYOUT_COLORS.get(label, "#7f7f7f"),
-                label=label,
-            )
-            for label in legend_labels
-        ]
-        fig.legend(
-            handles=legend_handles,
-            loc="lower center",
-            ncols=min(len(legend_labels), 4),
-        )
-    fig.tight_layout(rect=(0, 0.12, 1, 0.94))
-    fig.savefig(path, dpi=160)
-    plt.close(fig)
-
-
 def _ordered_layouts(layouts: Iterable[object]) -> list[str]:
     """Return wide first, then other layouts alphabetically."""
     names = sorted(str(layout) for layout in layouts)
@@ -1017,13 +510,6 @@ def _with_reference_series(
     return pd.concat([ratios, reference], ignore_index=True)
 
 
-def _facet_grid_shape(panel_count: int) -> tuple[int, int]:
-    """Return row and column counts with at most three columns."""
-    column_count = min(3, max(panel_count, 1))
-    row_count = (panel_count + column_count - 1) // column_count
-    return row_count, column_count
-
-
 def _geometric_mean(values: pd.Series) -> float:
     """Return the geometric mean, the standard average for ratios."""
     return float(np.exp(np.log(values).mean()))
@@ -1043,18 +529,6 @@ def _time_summary_ratios(ratios: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def _direction_title(title: str, *, better: str) -> str:
-    """Return a plot title with a direction cue."""
-    return f"{title}\n({better} is better)"
-
-
-def _ratio_axis_label(value_column: str, *, baseline: str = "array / wide") -> str:
-    """Return the y-axis label for a ratio plot."""
-    if value_column == "artifact_size_ratio":
-        return f"Size ratio ({baseline})"
-    return f"Time ratio ({baseline})"
-
-
 def _ordered_groups(
     data: pd.DataFrame,
 ) -> Iterator[tuple[tuple[str, str], pd.DataFrame]]:
@@ -1067,213 +541,107 @@ def _ordered_groups(
                 yield (backend, layout), layout_data
 
 
-def _ordered_group_labels(data: pd.DataFrame) -> Iterator[tuple[str, str]]:
-    """Yield backend and layout labels in plot order."""
-    for label, _group in _ordered_groups(data):
-        yield label
+FIGURE_TITLES = {
+    "combined": "Every layout against CSV wide",
+    "backend_wide": "Array-like layouts against their own wide layout",
+    "wide_layouts": "Wide layouts",
+    "explorer": "Absolute times and sizes",
+    "real_world": "Time and egress for the real-world example",
+    "row_scaling": "Time against row count",
+    "profiles": "Storage size against time",
+}
+FIGURE_CAPTIONS = {
+    "combined": (
+        "Every layout divided by CSV wide, which is the flat line at 1.0. "
+        "Parquet wide is the only other wide layout shown here. Figure 3 shows "
+        "all of them."
+    ),
+    "backend_wide": (
+        "Each array-like layout divided by the wide layout of the same backend. "
+        "Values below 1.0 favor the array-like layout. This is the fairest "
+        "comparison, because both layouts use the same format."
+    ),
+    "wide_layouts": (
+        "Wide layouts only, divided by CSV wide, which is the flat line at 1.0."
+    ),
+    "explorer": (
+        "The figures above show ratios. Pick an operation and a profile to see "
+        "the absolute times and sizes. The key applies to this plot too."
+    ),
+    "real_world": (
+        "Left: time for one use, split into download and read. Right: egress "
+        "cost over the chosen number of uses. Lower is better in both panels. "
+        "Change the file size, the uses, the price, or the download speed to see "
+        "how the result moves. The starting values are a "
+        f"{EXAMPLE_DATASET_GB:g} GB file, {EXAMPLE_USES:,} uses, "
+        f"${EXAMPLE_EGRESS_DOLLARS_PER_GB:.2f} per GB, and "
+        f"{EXAMPLE_DOWNLOAD_MB_PER_SECOND} MB/s."
+    ),
+    "row_scaling": "Median time against row count. Both axes use a log scale.",
+    "profiles": (
+        "Storage size against time at the largest feature count. Each line joins "
+        "the default profile (filled) to the compact profile (open). Points "
+        "without a line have no compact profile. Squares are wide layouts and "
+        "circles are array-like layouts. Lower and further left is better."
+    ),
+}
 
 
-def _series_color(label: tuple[str, str]) -> str:
-    """Return the color for a combined-plot series."""
-    return SERIES_COLORS.get(label, "#666666")
+def _figure_link(number: int) -> str:
+    """Return a link to a figure, such as ``[Figure 2](#figure-2)``."""
+    return f"[Figure {number}](#figure-{number})"
 
 
-def _series_legend_handle(label: tuple[str, str]) -> Line2D:
-    """Return a legend key that shows only the line color and the line style."""
-    return Line2D(
-        [],
-        [],
-        color=_series_color(label),
-        linestyle=_series_linestyle(label),
-        linewidth=1.7,
-        label="/".join(label),
-    )
-
-
-def _series_linestyle(label: tuple[str, str]) -> Literal["--", "-"]:
-    """Return a dashed line for wide layouts and a solid line otherwise."""
-    return "--" if label[1] == "wide" else "-"
-
-
-def _plot_with_errorbars(
-    ax: plt.Axes,
-    x_values: pd.Series,
-    y_values: pd.Series,
+def figure_numbers(
+    figure_ids: Collection[str],
     *,
-    style: PlotStyle,
-    yerr: list[list[float]] | None,
-) -> object:
-    """Plot one line and include error bars when repeat intervals exist."""
-    label = style.get("label")
-    color = style.get("color")
-    linestyle = style.get("linestyle", "-")
-    if yerr is None:
-        return ax.plot(
-            x_values,
-            y_values,
-            marker="o",
-            markersize=4.5,
-            linewidth=1.7,
-            linestyle=linestyle,
-            label=label,
-            color=color,
-        )[0]
-    container = ax.errorbar(
-        x_values,
-        y_values,
-        yerr=yerr,
-        fmt=f"{linestyle}o",
-        markersize=4.5,
-        linewidth=1.7,
-        elinewidth=1.5,
-        capsize=4,
-        capthick=1.5,
-        label=label,
-        color=color,
-        markeredgecolor="white",
-        markeredgewidth=0.6,
-    )
-    return container
-
-
-def _errorbar_interval(
-    data: pd.DataFrame,
-    value_column: str,
-) -> list[list[float]] | None:
-    """Return asymmetric error bars from repeat quantiles."""
-    columns = _errorbar_columns(value_column)
-    if columns is None:
-        return None
-    lower_column, upper_column = columns
-    required = {value_column, lower_column, upper_column}
-    if not required.issubset(data.columns):
-        return None
-
-    lower_errors: list[float] = []
-    upper_errors: list[float] = []
-    for _, row in data.iterrows():
-        value = float(row[value_column])
-        lower_errors.append(max(value - float(row[lower_column]), 0.0))
-        upper_errors.append(max(float(row[upper_column]) - value, 0.0))
-    return [lower_errors, upper_errors]
-
-
-def _errorbar_for_dimensions(
-    *,
-    data: pd.DataFrame,
-    dimensions: list[int],
-    value_column: str,
-) -> list[list[float]] | None:
-    """Return bar error intervals in the same order as plotted dimensions."""
-    columns = _errorbar_columns(value_column)
-    if columns is None:
-        return None
-    lower_errors: list[float] = []
-    upper_errors: list[float] = []
-    found_interval = False
-    for dimension in dimensions:
-        dimension_data = data[data["dimensions"] == dimension]
-        interval = _errorbar_interval(dimension_data, value_column)
-        if interval is None or dimension_data.empty:
-            lower_errors.append(0.0)
-            upper_errors.append(0.0)
-            continue
-        lower_errors.append(interval[0][0])
-        upper_errors.append(interval[1][0])
-        found_interval = True
-    if not found_interval:
-        return None
-    return [lower_errors, upper_errors]
-
-
-def _errorbar_columns(value_column: str) -> tuple[str, str] | None:
-    """Return lower and upper interval columns for a plotted value."""
-    if value_column == "median_seconds":
-        return "q25_seconds", "q75_seconds"
-    if value_column == "time_ratio":
-        return "time_ratio_q25", "time_ratio_q75"
-    return None
-
-
-def _value_for_dimension(
-    *,
-    data: pd.DataFrame,
-    dimension: int,
-    value_column: str,
-) -> float:
-    """Return one plotted value for a dimension."""
-    values = data[data["dimensions"] == dimension][value_column]
-    if values.empty:
-        return 0.0
-    return float(values.iloc[0])
-
-
-def update_readme(  # noqa: PLR0913
-    *,
-    readme_path: Path,
     summary: pd.DataFrame,
-    figure_paths: list[Path],
-    environment: dict[str, Any] | None = None,
-    encodings: pd.DataFrame | None = None,
-    floor: pd.DataFrame | None = None,
     sweep: pd.DataFrame | None = None,
     scaling: pd.DataFrame | None = None,
-) -> None:
-    """Insert the latest benchmark results and setup into the README.
+) -> dict[str, int]:
+    """Number the figures that have data, in page order.
 
-    The results block is appended when its markers are missing. The setup block is
-    replaced only when its markers exist.
+    The text refers to figures by these numbers, so a figure without data must
+    not take a number.
     """
-    text = readme_path.read_text(encoding="utf-8")
-    results = render_results_section(
-        summary=summary,
-        figure_paths=figure_paths,
-        encodings=encodings,
-        floor=floor,
-        sweep=sweep,
-        scaling=scaling,
-    )
-    text = _replace_block(text, RESULTS_START, RESULTS_END, results, append=True)
-    setup = "\n".join(render_setup_section(summary, environment))
-    text = _replace_block(text, SETUP_START, SETUP_END, setup, append=False)
-    readme_path.write_text(text, encoding="utf-8")
+    has_data = {
+        "real_world": lambda: not real_world_table(summary, scaling).empty,
+        "row_scaling": lambda: not row_scaling_table(sweep).empty,
+        "profiles": lambda: not profile_comparison_table(summary).empty,
+    }
+    shown = [
+        figure
+        for figure in FIGURE_IDS
+        if figure in figure_ids and has_data.get(figure, lambda: True)()
+    ]
+    return {figure: number for number, figure in enumerate(shown, start=1)}
 
 
-def _replace_block(
-    text: str,
-    start: str,
-    end: str,
-    content: str,
-    *,
-    append: bool,
-) -> str:
-    """Replace the text between two markers, or append a block when asked."""
-    block = f"{start}\n\n{content}\n\n{end}"
-    if start in text and end in text:
-        before = text.split(start, maxsplit=1)[0]
-        after = text.split(end, maxsplit=1)[1]
-        return before + block + after
-    return text.rstrip() + "\n\n" + block + "\n" if append else text
+def _shows_ratios(number: int | None) -> str:
+    """Return a sentence that points at the ratio figure, or nothing."""
+    if number is None:
+        return ""
+    return f" {_figure_link(number)} shows these ratios at every feature count."
 
 
-def render_results_section(  # noqa: PLR0913
-    *,
-    summary: pd.DataFrame,
-    figure_paths: list[Path],
-    encodings: pd.DataFrame | None = None,
-    floor: pd.DataFrame | None = None,
-    sweep: pd.DataFrame | None = None,
-    scaling: pd.DataFrame | None = None,
-) -> str:
-    """Render the summary, the plots, the real-world example, and the details."""
-    all_profiles = summary
-    summary = default_profile(summary)
-    max_dimension = int(summary["dimensions"].max())
-    impact = real_world_bullet(all_profiles, scaling)
+def _with_figure(bullet: str, number: int | None) -> str:
+    """Add a pointer to the figure that depicts a bullet, when there is one."""
+    return bullet if number is None else f"{bullet} See {_figure_link(number)}."
+
+
+def _figures_section(summary: pd.DataFrame, numbers: dict[str, int]) -> list[str]:
+    """Return the Figures section: how to read them, the key, and each figure.
+
+    The section is wrapped so that the key sticks to the top of the page only
+    while the reader is among the figures.
+    """
+    if not numbers:
+        return []
     lines = [
-        *summary_section(all_profiles, extra_bullets=[impact] if impact else None),
         "",
-        "## Plots",
+        "## Figures",
+        "",
+        '<section class="figures-section">',
         "",
         _run_description(summary),
         "",
@@ -1293,61 +661,64 @@ def render_results_section(  # noqa: PLR0913
         "- Error bars show the q25-to-q75 range across repetitions.",
         "- The y-axis uses a log scale to show small and large changes.",
         "- Dashed lines are wide layouts. Solid lines are array-like layouts.",
+        (
+            "- Click a layout in the key to hide or show it in every figure. "
+            "Click a backend name to hide or show all of its layouts. Hover over "
+            "a point to read its value."
+        ),
+        "",
+        '<div id="filters" class="filters"></div>',
     ]
-
-    figures = _named_figures(figure_paths)
-    figure_number = 0
-    for filename, heading, alt_text, caption in [
-        (
-            "combined_facet_overview.png",
-            "Every layout against CSV wide",
-            "Time and storage ratios for every layout against CSV wide",
-            (
-                "Every layout divided by CSV wide, which is the flat line at 1.0. "
-                "Parquet wide is the only other wide layout shown here. The "
-                "section Wide layouts shows all of them."
-            ),
-        ),
-        (
-            "backend_wide_facet_overview.png",
-            "Array-like layouts against their own wide layout",
-            "Time and storage ratios for array-like layouts against wide layouts",
-            (
-                "Each array-like layout divided by the wide layout of the same "
-                "backend. Values below 1.0 favor the array-like layout. This is "
-                "the fairest comparison, because both layouts use the same format."
-            ),
-        ),
-        (
-            "wide_layouts_facet_overview.png",
-            "Wide layouts",
-            "Time and storage ratios for wide layouts against CSV wide",
-            ("Wide layouts only, divided by CSV wide, which is the flat line at 1.0."),
-        ),
-    ]:
-        path = figures.get(filename)
-        if path is None:
-            continue
-        figure_number += 1
+    for figure, number in numbers.items():
         lines.extend(
             [
                 "",
-                f"### {heading}",
+                f"### Figure {number}. {FIGURE_TITLES[figure]}",
                 "",
-                f"![{alt_text}]({path.as_posix()})",
+                _figure_placeholder(figure),
                 "",
-                f"Figure {figure_number}. {caption}",
+                FIGURE_CAPTIONS[figure],
             ]
         )
-        if filename == "combined_facet_overview.png":
+        if figure == "combined":
             lines.extend(["", REFERENCE_NOTE])
+    lines.extend(["", "</section>"])
+    return lines
 
-    real_world_figure = figures.get("real_world_example.png")
-    if real_world_figure is not None:
-        figure_number += 1
+
+def render_results_section(  # noqa: PLR0913
+    *,
+    summary: pd.DataFrame,
+    figure_ids: Collection[str] = (),
+    encodings: pd.DataFrame | None = None,
+    floor: pd.DataFrame | None = None,
+    sweep: pd.DataFrame | None = None,
+    scaling: pd.DataFrame | None = None,
+) -> str:
+    """Render the summary, the figures, the real-world example, and the details.
+
+    A figure is a placeholder that the page fills with an interactive plot. Only
+    the figures named in ``figure_ids`` appear, and each has a number that the
+    text uses to refer to it.
+    """
+    all_profiles = summary
+    summary = default_profile(summary)
+    max_dimension = int(summary["dimensions"].max())
+    numbers = figure_numbers(
+        figure_ids, summary=all_profiles, sweep=sweep, scaling=scaling
+    )
+    impact = real_world_bullet(all_profiles, scaling, numbers.get("real_world"))
+    lines = [
+        *summary_section(
+            all_profiles,
+            extra_bullets=[impact] if impact else None,
+            figure_numbers=numbers,
+        ),
+        *_figures_section(summary, numbers),
+    ]
     lines.extend(
         _blank_before(
-            real_world_section(all_profiles, scaling, real_world_figure, figure_number)
+            real_world_section(all_profiles, scaling, numbers.get("real_world"))
         )
     )
     lines.extend(
@@ -1364,6 +735,7 @@ def render_results_section(  # noqa: PLR0913
                 "slower or larger. For example, +100% means twice as slow or twice "
                 "as large, and -50% means half the time or size. "
                 f"{_feature_projection_note(summary, max_dimension)}"
+                f"{_shows_ratios(numbers.get('backend_wide'))}"
             ),
             "",
             array_vs_wide_markdown(array_vs_wide_table(summary)),
@@ -1375,27 +747,9 @@ def render_results_section(  # noqa: PLR0913
         ]
     )
 
-    row_figure = figures.get("row_scaling.png")
-    has_sweep = not row_scaling_table(sweep).empty
-    if row_figure is not None and has_sweep:
-        figure_number += 1
-    lines.extend(
-        _blank_before(
-            row_scaling_section(
-                sweep,
-                row_figure if has_sweep else None,
-                figure_number,
-            )
-        )
-    )
+    lines.extend(_blank_before(row_scaling_section(sweep, numbers.get("row_scaling"))))
     lines.extend(_encoding_lines(all_profiles, encodings))
-    lines.extend(
-        _appendix_lines(
-            all_profiles,
-            figures.get("encoding_profiles.png"),
-            figure_number + 1,
-        )
-    )
+    lines.extend(_appendix_lines(all_profiles, numbers.get("profiles")))
     return "\n".join(lines)
 
 
@@ -1538,6 +892,7 @@ def _named(backend: str) -> str:
 def real_world_bullet(
     summary: pd.DataFrame,
     scaling: pd.DataFrame | None = None,
+    figure_number: int | None = None,
 ) -> str | None:
     """Return one summary bullet with the real-world time and egress result."""
     table = real_world_table(summary, scaling)
@@ -1548,13 +903,16 @@ def real_world_bullet(
     if row is None:
         return None
     baseline = records[0]
+    see = "See Real-world example"
+    if figure_number is not None:
+        see += f" and {_figure_link(figure_number)}"
     return (
         f"- **Real-world impact.** For a {EXAMPLE_DATASET_GB:g} GB CSV wide file, "
         f"{_layout_name('parquet', 'fixed_array')} takes "
         f"{_duration(row['total_seconds'])} per use instead of "
         f"{_duration(baseline['total_seconds'])} and costs "
         f"{_dollars(row['egress_dollars'])} instead of "
-        f"{_dollars(baseline['egress_dollars'])} in egress. See Real-world example."
+        f"{_dollars(baseline['egress_dollars'])} in egress. {see}."
     )
 
 
@@ -1588,6 +946,7 @@ PLAIN_OPERATIONS = (
 def summary_section(
     summary: pd.DataFrame,
     extra_bullets: list[str] | None = None,
+    figure_numbers: Mapping[str, int] | None = None,
 ) -> list[str]:
     """Return the summary: one main finding as a quote, then concrete bullets."""
     all_profiles = summary
@@ -1607,15 +966,19 @@ def summary_section(
     quote = _main_finding(faster, len(matrix), groups, features)
     if quote:
         lines.extend([f"> **Main finding.** {quote}", "", PLAIN_OPERATIONS, ""])
+    ratio_figure = (figure_numbers or {}).get("backend_wide")
     if faster:
-        lines.append(_matrix_bullet(faster, slower))
+        lines.append(_with_figure(_matrix_bullet(faster, slower), ratio_figure))
     if groups:
-        lines.append(_projection_bullet(groups, features))
+        lines.append(_with_figure(_projection_bullet(groups, features), ratio_figure))
+    encoding = _encoding_bullet(all_profiles)
     lines.extend(
         bullet
         for bullet in [
             _text_packing_bullet(summary),
-            _encoding_bullet(all_profiles),
+            _with_figure(encoding, (figure_numbers or {}).get("profiles"))
+            if encoding
+            else "",
             *(extra_bullets or []),
         ]
         if bullet
@@ -1844,14 +1207,10 @@ def _encoding_lines(
     return lines
 
 
-def _appendix_lines(
-    summary: pd.DataFrame,
-    path: Path | None,
-    figure_number: int,
-) -> list[str]:
-    """Return the appendix that plots storage size against time."""
+def _appendix_lines(summary: pd.DataFrame, figure_number: int | None) -> list[str]:
+    """Return the appendix on how the compact profile moves size and time."""
     comparison = profile_comparison_table(summary)
-    if path is None or comparison.empty:
+    if figure_number is None or comparison.empty:
         return []
     return [
         "",
@@ -1863,16 +1222,8 @@ def _appendix_lines(
             "ranking of formats for real data."
         ),
         "",
-        f"![Storage size against time for the default and compact profiles]"
-        f"({path.as_posix()})",
-        "",
-        (
-            f"Figure {figure_number}. Storage size against time at the largest "
-            "feature count. Each arrow goes from the default profile (filled) to "
-            "the compact profile (open). Points without an arrow have no compact "
-            "profile. Squares are wide layouts and circles are array-like "
-            "layouts. Lower and further left is better."
-        ),
+        f"{_figure_link(figure_number)} plots storage size against time at the "
+        "largest feature count.",
         "",
         "Changes from the default profile to the compact profile:",
         "",
@@ -1939,9 +1290,9 @@ def _thread_text(limits: dict[str, Any]) -> str:
     return "; ".join(parts)
 
 
-def _named_figures(figure_paths: list[Path]) -> dict[str, Path]:
-    """Return figure paths keyed by file name."""
-    return {path.name: path for path in figure_paths}
+def _figure_placeholder(figure_id: str) -> str:
+    """Return the HTML block that the page fills with an interactive plot."""
+    return f'<div class="figure" data-figure="{figure_id}"></div>'
 
 
 def _optional_paragraph(text: str | None) -> list[str]:
@@ -2191,8 +1542,7 @@ def _row_limits_note(sweep: pd.DataFrame) -> str | None:
 
 def row_scaling_section(
     sweep: pd.DataFrame | None,
-    figure: Path | None = None,
-    number: int = 0,
+    figure_number: int | None = None,
 ) -> list[str]:
     """Return the section on how time grows with the number of rows."""
     table = row_scaling_table(sweep)
@@ -2212,14 +1562,12 @@ def row_scaling_section(
             "rows."
         ),
     ]
-    if figure is not None:
+    if figure_number is not None:
         lines.extend(
             [
                 "",
-                f"![Time against row count for each layout]({figure.as_posix()})",
-                "",
-                f"Figure {number}. Median time against row count. Both axes use a "
-                "log scale.",
+                f"{_figure_link(figure_number)} plots these times against the row "
+                "count.",
             ]
         )
     body = [
@@ -2244,59 +1592,6 @@ def row_scaling_section(
     if note:
         lines.extend(["", note])
     return lines
-
-
-def write_row_scaling_figure(
-    sweep: pd.DataFrame | None,
-    figure_dir: Path = Path("figures"),
-) -> Path | None:
-    """Plot median time against row count for each layout."""
-    if sweep is None or sweep.empty:
-        return None
-    data = default_profile(sweep)
-    if data["rows"].nunique() < 2:  # noqa: PLR2004
-        return None
-    figure_dir.mkdir(parents=True, exist_ok=True)
-    fig, axes = plt.subplots(
-        1, len(ROW_SCALING_OPERATIONS), figsize=(13, 4.4), squeeze=False
-    )
-    labels: list[tuple[str, str]] = []
-    for ax, (operation, title) in zip(
-        axes.ravel(), ROW_SCALING_OPERATIONS, strict=True
-    ):
-        for label, group in _ordered_groups(data):
-            points = group[group["operation"] == operation].sort_values("rows")
-            if points.empty:
-                continue
-            ax.plot(
-                points["rows"],
-                points["median_seconds"],
-                marker="o",
-                markersize=4.5,
-                linewidth=1.7,
-                linestyle=_series_linestyle(label),
-                color=_series_color(label),
-            )
-            if label not in labels:
-                labels.append(label)
-        ax.set_xscale("log")
-        ax.set_yscale("log")
-        ax.set_title(_direction_title(title, better="lower"))
-        ax.set_xlabel("Rows")
-        ax.set_ylabel("Median seconds")
-        ax.grid(True, alpha=0.25)
-    columns = min(5, max(len(labels), 1))
-    fig.legend(
-        handles=[_series_legend_handle(label) for label in labels],
-        loc="lower center",
-        ncols=columns,
-        fontsize="small",
-    )
-    fig.tight_layout(rect=(0, 0.02 + 0.05 * -(-len(labels) // columns), 1, 1))
-    path = figure_dir / "row_scaling.png"
-    fig.savefig(path, dpi=160)
-    plt.close(fig)
-    return path
 
 
 def _blank_before(lines: list[str]) -> list[str]:
@@ -2469,92 +1764,6 @@ def real_world_table(
         first["egress_dollars"] - table["egress_dollars"]
     ) * EXAMPLE_USES
     return table
-
-
-def real_world_figure_data(
-    summary: pd.DataFrame,
-    scaling: pd.DataFrame | None = None,
-) -> pd.DataFrame:
-    """Return time and egress for each layout that reads the whole file.
-
-    The streamed layout is left out. It reads only a few features, so it does
-    not answer the same question as the other layouts.
-    """
-    if summary.empty:
-        return pd.DataFrame()
-    table = real_world_table(summary, scaling)
-    if table.empty:
-        return pd.DataFrame()
-    table = table[table["variant"] != "streamed"]
-    data = pd.DataFrame(
-        {
-            "name": [
-                _example_name(row).replace("`", "") for row in table.to_dict("records")
-            ],
-            "download_seconds": table["download_seconds"],
-            "read_seconds": table["read_seconds"],
-            "total_seconds": table["total_seconds"],
-            "egress_dollars_total": table["egress_dollars"] * EXAMPLE_USES,
-        }
-    )
-    return data.sort_values(
-        "total_seconds", ascending=False, kind="stable"
-    ).reset_index(drop=True)
-
-
-def write_real_world_figure(
-    summary: pd.DataFrame,
-    scaling: pd.DataFrame | None = None,
-    figure_dir: Path = Path("figures"),
-) -> Path | None:
-    """Plot time for one use and egress over many uses for the real-world example."""
-    data = real_world_figure_data(summary, scaling)
-    if data.empty:
-        return None
-    figure_dir.mkdir(parents=True, exist_ok=True)
-    positions = np.arange(len(data))
-    fig, (time_ax, cost_ax) = plt.subplots(
-        1,
-        2,
-        figsize=(13, 0.5 * len(data) + 2.4),
-        sharey=True,
-        gridspec_kw={"width_ratios": [1.15, 1]},
-    )
-    time_ax.barh(positions, data["download_seconds"], color="#56B4E9", label="Download")
-    time_ax.barh(
-        positions,
-        data["read_seconds"],
-        left=data["download_seconds"],
-        color="#0072B2",
-        label="Read into memory",
-    )
-    cost_ax.barh(positions, data["egress_dollars_total"], color="#D55E00")
-    for position, seconds, dollars in zip(
-        positions, data["total_seconds"], data["egress_dollars_total"], strict=True
-    ):
-        time_ax.text(
-            seconds, position, f" {_duration(seconds)}", va="center", fontsize="small"
-        )
-        cost_ax.text(
-            dollars, position, f" {_dollars(dollars)}", va="center", fontsize="small"
-        )
-    time_ax.set_yticks(positions, data["name"])
-    time_ax.invert_yaxis()
-    time_ax.set_title(_direction_title("Time for one use", better="lower"))
-    time_ax.set_xlabel("Seconds")
-    time_ax.legend(loc="lower right", fontsize="small")
-    cost_ax.set_title(
-        _direction_title(f"Egress over {EXAMPLE_USES:,} uses", better="lower")
-    )
-    cost_ax.set_xlabel("Dollars")
-    for ax in (time_ax, cost_ax):
-        ax.set_xlim(0, ax.get_xlim()[1] * 1.18)
-        ax.grid(True, axis="x", alpha=0.25)
-    fig.tight_layout()
-    path = figure_dir / "real_world_example.png"
-    fig.savefig(path, dpi=160)
-    plt.close(fig)
-    return path
 
 
 def _example_name(row: dict[str, Any]) -> str:
@@ -2836,27 +2045,10 @@ def _scaling_check_lines(records: list[dict[str, Any]]) -> list[str]:
     ]
 
 
-def _real_world_figure_lines(figure: Path | None, figure_number: int) -> list[str]:
-    """Return the figure and its caption, or nothing without a figure."""
-    if figure is None:
-        return []
-    return [
-        f"![Time and egress for the real-world example]({figure.as_posix()})",
-        "",
-        (
-            f"Figure {figure_number}. Left: time for one use, split into download "
-            "and read. Right: egress cost over "
-            f"{EXAMPLE_USES:,} uses. Lower is better in both panels. Layouts are "
-            "sorted by time for one use, so CSV wide is first."
-        ),
-    ]
-
-
 def real_world_section(
     summary: pd.DataFrame,
     scaling: pd.DataFrame | None = None,
-    figure: Path | None = None,
-    figure_number: int = 0,
+    figure_number: int | None = None,
 ) -> list[str]:
     """Return the real-world example: time and egress for a 1.5 GB CSV wide file."""
     table = real_world_table(summary, scaling)
@@ -2927,10 +2119,15 @@ def real_world_section(
             f"layouts save. The file holds about {rows_text} rows of "
             f"{features:,} features. A use is one download followed by one read "
             "into memory."
+            + (
+                f" {_figure_link(figure_number)} lets you change the file size, "
+                "the number of uses, the price, and the download speed."
+                if figure_number is not None
+                else ""
+            )
         ),
         *_optional_paragraph(_example_takeaway(records)),
         *_optional_paragraph(_parquet_size_paragraph(records)),
-        *_blank_before(_real_world_figure_lines(figure, figure_number)),
         "",
         "### One use",
         "",
@@ -3036,9 +2233,3 @@ def _run_description(summary: pd.DataFrame) -> str:
 def _layout_name(backend: str, layout: str) -> str:
     """Return a backend display name with the layout in code font."""
     return f"{BACKEND_DISPLAY_NAMES.get(backend, backend)} `{layout}`"
-
-
-def _figure_title(path: Path) -> str:
-    """Return a readable title for a generated figure path."""
-    name = path.stem.replace("_absolute_comparison", "")
-    return name.replace("_", " ").title()

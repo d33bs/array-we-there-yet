@@ -1,20 +1,15 @@
 """Tests for report generation."""
 
+import re
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
 from array_we_there_yet.report import (
-    SERIES_COLORS,
-    _direction_title,
-    _errorbar_interval,
-    _facet_grid_shape,
-    _facet_panels,
+    FIGURE_IDS,
     _ordered_backends,
     _parallelism_note,
-    _ratio_axis_label,
-    _series_legend_handle,
     _time_summary_ratios,
     _with_reference_series,
     csv_wide_ratio_table,
@@ -24,12 +19,10 @@ from array_we_there_yet.report import (
     profile_sensitivity_table,
     ratio_table,
     render_results_section,
-    write_combined_facet_overview,
-    write_figures,
-    write_profile_figure,
     write_profile_tables,
     write_ratio_tables,
 )
+from array_we_there_yet.site import build_page
 
 
 def _figure_summary() -> pd.DataFrame:
@@ -64,36 +57,21 @@ def _figure_summary() -> pd.DataFrame:
     )
 
 
-def test_write_figures_puts_the_csv_wide_comparison_first(tmp_path: Path) -> None:
-    """The main figure compares every layout with CSV wide."""
-    names = [path.name for path in write_figures(_figure_summary(), tmp_path)]
-
-    assert names[:3] == [
-        "combined_facet_overview.png",
-        "wide_layouts_facet_overview.png",
-        "backend_wide_facet_overview.png",
-    ]
-    assert "write_absolute_comparison.png" in names
-    assert "matrix_materialization_absolute_comparison.png" in names
-    assert "parquet_performance_tracking.png" not in names
-    assert "csv_wide_facet_overview.png" not in names
-
-
 def test_results_section_has_a_professional_structure(tmp_path: Path) -> None:
     """The results section uses ordered headings and no filler labels."""
     summary = _figure_summary()
-    paths = write_figures(summary, tmp_path)
-
-    section = render_results_section(summary=summary, figure_paths=paths)
+    section = render_results_section(summary=summary, figure_ids=FIGURE_IDS)
 
     headings = [line for line in section.splitlines() if line.startswith("#")]
     assert headings == [
         "## Summary",
-        "## Plots",
+        "## Figures",
         "### How to read the figures",
-        "### Every layout against CSV wide",
-        "### Array-like layouts against their own wide layout",
-        "### Wide layouts",
+        "### Figure 1. Every layout against CSV wide",
+        "### Figure 2. Array-like layouts against their own wide layout",
+        "### Figure 3. Wide layouts",
+        "### Figure 4. Absolute times and sizes",
+        "### Figure 5. Time and egress for the real-world example",
         "## Real-world example",
         "### One use",
         "### Savings over 1,000 uses",
@@ -121,9 +99,7 @@ def test_results_section_has_a_professional_structure(tmp_path: Path) -> None:
 def test_results_section_describes_the_run_and_findings(tmp_path: Path) -> None:
     """The opening paragraph states the data, and key findings are a table."""
     summary = _figure_summary()
-    paths = write_figures(summary, tmp_path)
-
-    section = render_results_section(summary=summary, figure_paths=paths)
+    section = render_results_section(summary=summary, figure_ids=FIGURE_IDS)
 
     assert "synthetic data with 10 rows and 4 to 8 features" in section
     assert "median of 1 repetition" in section
@@ -140,21 +116,17 @@ def test_results_section_describes_the_run_and_findings(tmp_path: Path) -> None:
 def test_results_section_explains_figures_once(tmp_path: Path) -> None:
     """Shared figure terms appear once, not in every caption."""
     summary = _figure_summary()
-    paths = write_figures(summary, tmp_path)
-
-    section = render_results_section(summary=summary, figure_paths=paths)
+    section = render_results_section(summary=summary, figure_ids=FIGURE_IDS)
 
     assert section.count("q25-to-q75") == 1
     assert section.count("log scale") == 1
     assert "Overall Time Index" not in section
     for figure_number in range(1, 4):
         assert f"Figure {figure_number}." in section
-    for image in [
-        "combined_facet_overview.png",
-        "wide_layouts_facet_overview.png",
-        "backend_wide_facet_overview.png",
-    ]:
-        assert f"(figures/{image})" in section.replace(str(tmp_path), "figures")
+    for figure in ["combined", "backend_wide", "wide_layouts", "explorer"]:
+        assert f'data-figure="{figure}"' in section
+    assert ".png" not in section
+    assert "![" not in section
 
 
 def test_ratio_tables_are_written(tmp_path: Path) -> None:
@@ -185,14 +157,6 @@ def test_ordered_backends_puts_csv_first_and_fast_formats_later() -> None:
         "vortex",
         "lance",
     ]
-
-
-def test_combined_facet_grid_stays_compact() -> None:
-    """Combined overview uses no more than three facets per row."""
-    assert _facet_grid_shape(10) == (4, 3)
-    assert _direction_title("Write", better="lower") == "Write\n(lower is better)"
-    assert _ratio_axis_label("time_ratio") == "Time ratio (array / wide)"
-    assert _ratio_axis_label("artifact_size_ratio") == "Size ratio (array / wide)"
 
 
 def test_time_summary_ratios_use_the_geometric_mean() -> None:
@@ -259,8 +223,6 @@ def test_ratio_table_carries_conservative_time_error_intervals() -> None:
     assert ratios.loc[0, "time_ratio"] == expected_time_ratio
     assert ratios.loc[0, "time_ratio_q25"] == expected_time_ratio_q25
     assert ratios.loc[0, "time_ratio_q75"] == expected_time_ratio_q75
-    assert _errorbar_interval(ratios, "time_ratio") == [[0.3], [1.0]]
-    assert _errorbar_interval(summary, "median_seconds") == [[2.0, 1.0], [1.0, 1.0]]
 
 
 def _csv_wide_summary() -> pd.DataFrame:
@@ -323,16 +285,6 @@ def test_csv_wide_ratio_table_is_empty_without_csv_wide() -> None:
     summary = summary[~((summary["backend"] == "csv") & (summary["layout"] == "wide"))]
 
     assert csv_wide_ratio_table(summary).empty
-
-
-def test_ratio_axis_label_names_the_baseline() -> None:
-    """Axis labels can name a baseline other than the backend wide layout."""
-    assert _ratio_axis_label("time_ratio", baseline="vs CSV wide") == (
-        "Time ratio (vs CSV wide)"
-    )
-    assert _ratio_axis_label("artifact_size_ratio", baseline="vs CSV wide") == (
-        "Size ratio (vs CSV wide)"
-    )
 
 
 def test_reference_series_plots_the_baseline_at_one() -> None:
@@ -409,9 +361,7 @@ def test_results_section_places_the_parallelism_note_after_findings(
     """The note sits under Key findings, after the plots and the example."""
     summary = _figure_summary()
     summary["median_parallelism"] = 4.0
-    paths = write_figures(summary, tmp_path)
-
-    section = render_results_section(summary=summary, figure_paths=paths)
+    section = render_results_section(summary=summary, figure_ids=FIGURE_IDS)
 
     guide = section.index("### How to read the figures")
     findings = section.index("### Key findings")
@@ -453,27 +403,6 @@ def _all_operations_summary() -> pd.DataFrame:
             ]
         ]
     )
-
-
-def test_facet_panels_fill_exactly_a_three_by_three_grid() -> None:
-    """Each facet figure has seven operations, one time summary, and storage."""
-    ratios = csv_wide_ratio_table(_all_operations_summary())
-
-    panels = _facet_panels(ratios=ratios, baseline="vs CSV wide")
-
-    titles = [title.split("\n")[0] for title, *_ in panels]
-    assert titles == [
-        "Write",
-        "Full Read",
-        "Matrix Materialization",
-        "Random Rows",
-        "Feature Projection",
-        "Mixed Retrieval",
-        "Vector Norm",
-        "Geometric Mean Time",
-        "Storage Size",
-    ]
-    assert _facet_grid_shape(len(panels)) == (3, 3)
 
 
 def _profile_summary() -> pd.DataFrame:
@@ -561,18 +490,6 @@ def test_profile_comparison_table_is_empty_without_compact_rows() -> None:
     assert profile_comparison_table(summary.drop(columns="profile")).empty
 
 
-def test_write_profile_figure_needs_compact_rows(tmp_path: Path) -> None:
-    """The size-versus-time figure exists only when a compact profile ran."""
-    summary = _profile_summary()
-
-    figure = write_profile_figure(summary, tmp_path)
-    missing = write_profile_figure(summary[summary["profile"] == "default"], tmp_path)
-
-    assert figure == tmp_path / "encoding_profiles.png"
-    assert figure.exists()
-    assert missing is None
-
-
 def test_encoding_table_lists_each_profile_with_bytes_per_value() -> None:
     """The encodings table joins observed encodings to stored bytes per value."""
     summary = _profile_summary()
@@ -627,11 +544,9 @@ def test_results_section_puts_encoding_sensitivity_before_the_appendix(
 ) -> None:
     """Sensitivity and observed encodings lead. The profile plot is an appendix."""
     summary = _profile_summary()
-    paths = write_figures(summary, tmp_path)
-
     section = render_results_section(
         summary=summary,
-        figure_paths=paths,
+        figure_ids=FIGURE_IDS,
         encodings=_profile_encodings(),
     )
 
@@ -649,7 +564,7 @@ def test_results_section_puts_encoding_sensitivity_before_the_appendix(
     assert "synthetic" in appendix
     assert "not a ranking" in appendix
     assert "| Parquet `fixed_array` | -50% | +50% | +300% |" in appendix
-    assert "![Storage size against time" in appendix
+    assert re.search(r"\[Figure \d+\]\(#figure-\d+\) plots storage size", appendix)
     assert ".csv" not in section
     assert "| Parquet | `fixed_array` | compact | zstd | 3.12 |" in section
     assert "Most size differences between the binary formats" in section
@@ -658,9 +573,7 @@ def test_results_section_puts_encoding_sensitivity_before_the_appendix(
 def test_results_section_states_the_sensitivity_conclusion(tmp_path: Path) -> None:
     """The sensitivity table compares array-to-wide ratios under both profiles."""
     summary = _profile_summary()
-    paths = write_figures(summary, tmp_path)
-
-    section = render_results_section(summary=summary, figure_paths=paths)
+    section = render_results_section(summary=summary, figure_ids=FIGURE_IDS)
 
     assert (
         "| Backend | Layout | Storage size | Matrix materialization "
@@ -675,9 +588,7 @@ def test_results_section_states_the_sensitivity_conclusion(tmp_path: Path) -> No
 def test_results_section_skips_profiles_without_a_compact_run(tmp_path: Path) -> None:
     """Runs with only the default profile show no profile sections."""
     summary = _figure_summary()
-    paths = write_figures(summary, tmp_path)
-
-    section = render_results_section(summary=summary, figure_paths=paths)
+    section = render_results_section(summary=summary, figure_ids=FIGURE_IDS)
 
     assert "Encoding profiles" not in section
     assert "profile_comparison" not in section
@@ -761,38 +672,12 @@ def test_profile_tables_are_written_only_as_parquet(tmp_path: Path) -> None:
     assert write_profile_tables(_figure_summary(), tmp_path) == []
 
 
-def test_series_legend_handle_shows_only_line_color_and_style() -> None:
-    """Legend keys are plain lines: no markers and no error-bar caps."""
-    wide = _series_legend_handle(("csv", "wide"))
-    array = _series_legend_handle(("parquet", "fixed_array"))
+def test_page_text_refers_only_to_sections_that_exist() -> None:
+    """Each "See ..." points at a heading that the page has."""
+    page = build_page(summary=_figure_summary(), environment=None)
 
-    assert wide.get_label() == "csv/wide"
-    assert wide.get_color() == SERIES_COLORS[("csv", "wide")]
-    assert wide.get_linestyle() == "--"
-    assert array.get_label() == "parquet/fixed_array"
-    assert array.get_color() == SERIES_COLORS[("parquet", "fixed_array")]
-    assert array.get_linestyle() == "-"
-    for handle in (wide, array):
-        assert handle.get_marker() == "None"
-
-
-def test_facet_figure_legend_uses_plain_line_keys(tmp_path: Path) -> None:
-    """The saved figure builds its shared legend from plain line keys."""
-    ratios = csv_wide_ratio_table(_all_operations_summary())
-
-    figure = write_combined_facet_overview(_all_operations_summary(), tmp_path)
-
-    assert figure is not None
-    assert figure.exists()
-    labels = {"/".join(pair) for pair in ratios[["backend", "layout"]].to_numpy()}
-    assert "parquet/wide" in labels
-
-
-def test_readme_text_refers_only_to_sections_that_exist(tmp_path: Path) -> None:
-    """The static README names no section that the report does not produce."""
-    text = (Path(__file__).parents[1] / "README.md").read_text(encoding="utf-8")
-    readme = " ".join(text.split())
-
-    assert "The Encoding profiles section" not in readme
-    assert "Repetitions." in readme
-    assert "A full run takes about" in readme
+    titles = set(re.findall(r"<h[23] id=\"[^\"]+\">(.*?)</h[23]>", page))
+    references = re.findall(r"See ([A-Z][A-Za-z -]+?)[.,)]", page)
+    assert references
+    for title in references:
+        assert title in titles, title
