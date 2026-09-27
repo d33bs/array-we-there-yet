@@ -206,7 +206,6 @@ def test_the_intro_explains_the_idea_in_plain_words_for_a_newcomer() -> None:
         assert backend in intro
     assert "you" in intro.lower()
     assert "text" in intro and "CSV wide" in intro
-    assert "summary" in intro.lower()
     prose = re.sub(r"<[^>]+>", " ", intro)
     assert len(prose.split()) < 340  # noqa: PLR2004
     page = _page()
@@ -310,3 +309,25 @@ def test_the_heading_uses_a_simple_seafoam_to_gold_gradient_with_no_red() -> Non
     css_no_hash = css.replace("dashed", "").replace("gh-link", "")
     assert "#e11d48" not in css_no_hash
     assert "#fb7185" not in css_no_hash
+
+
+def test_the_first_four_paragraphs_link_to_sources_also_in_references() -> None:
+    """Conceptual claims in the intro link out, and the same source is cited below."""
+    intro = static_section("intro")
+    references = static_section("references")
+
+    paragraphs = intro.split("\n\n")
+    body = "\n\n".join(p for p in paragraphs if not p.startswith("<figure"))
+
+    links = {
+        "https://doi.org/10.1038/s41586-020-2649-2": "NumPy",
+        "https://doi.org/10.1145/362384.362685": "**wide**",
+        "https://doi.org/10.1145/588111.588133": "**array-like**",
+        "https://doi.org/10.1109/ICDE.2005.1": None,
+        "https://doi.org/10.1145/5666.5673": None,
+    }
+    for doi, term in links.items():
+        assert doi in body, doi
+        assert doi in references, doi
+        if term:
+            assert f"[{term}]({doi})" in body, term

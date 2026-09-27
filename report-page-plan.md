@@ -14,16 +14,16 @@ becomes a short summary and run instructions.
 
 ## Steps
 
-| Step | Work                                                                                      | Status |
-| ---- | ----------------------------------------------------------------------------------------- | ------ |
-| 1    | `plots.py`: build JSON specs for the facet views, row scaling, profiles, real world       | done   |
-| 2    | `content/`: move the static README sections (methods, limits, terms) into the package      | done   |
-| 3    | `site.py`: render Markdown to HTML with figure placeholders, fill a Jinja template        | done   |
-| 4    | `site.js`: draw the specs with Plotly, add filters (backend, layout, profile, operation)  | done   |
-| 5    | Real-world calculator: sliders for file size, uses, price, and download speed             | done   |
-| 6    | CLI: `report` writes `site/index.html`, drop figure and README options                    | done   |
-| 7    | Cut the README down, remove Matplotlib code, `figures/`, Sphinx, and old tests            | done   |
-| 8    | Workflow: build the page and deploy it to GitHub Pages                                    | done   |
+| Step | Work                                                                                     | Status |
+| ---- | ---------------------------------------------------------------------------------------- | ------ |
+| 1    | `plots.py`: build JSON specs for the facet views, row scaling, profiles, real world      | done   |
+| 2    | `content/`: move the static README sections (methods, limits, terms) into the package    | done   |
+| 3    | `site.py`: render Markdown to HTML with figure placeholders, fill a Jinja template       | done   |
+| 4    | `site.js`: draw the specs with Plotly, add filters (backend, layout, profile, operation) | done   |
+| 5    | Real-world calculator: sliders for file size, uses, price, and download speed            | done   |
+| 6    | CLI: `report` writes `site/index.html`, drop figure and README options                   | done   |
+| 7    | Cut the README down, remove Matplotlib code, `figures/`, Sphinx, and old tests           | done   |
+| 8    | Workflow: build the page and deploy it to GitHub Pages                                   | done   |
 
 ## Checks
 

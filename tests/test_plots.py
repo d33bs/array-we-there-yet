@@ -109,6 +109,7 @@ def test_facets_without_ratios_are_left_out() -> None:
 def test_row_scaling_spec_has_a_panel_per_operation() -> None:
     """Time against rows for matrix, random rows, and projection."""
     spec = row_scaling_spec(_sweep())
+    assert spec is not None
 
     assert [panel["id"] for panel in spec["panels"]] == [
         "matrix_materialization",
@@ -132,6 +133,7 @@ def test_row_scaling_spec_needs_two_row_counts() -> None:
 def test_profile_spec_pairs_default_and_compact_points() -> None:
     """Each layout has a default and a compact point, sized against raw float32."""
     spec = profile_spec(_real_world_summary())
+    assert spec is not None
 
     assert [panel["id"] for panel in spec["panels"]] == [
         "matrix_materialization",
@@ -159,6 +161,7 @@ def test_profile_spec_is_absent_without_a_compact_profile() -> None:
 def test_real_world_spec_gives_sizes_and_reads_at_the_example_file_size() -> None:
     """The page scales these to the file size that a reader picks."""
     spec = real_world_spec(_real_world_summary(), None)
+    assert spec is not None
 
     assert spec["datasetGb"] == pytest.approx(1.5)
     assert spec["downloadMbPerSecond"] == pytest.approx(100)

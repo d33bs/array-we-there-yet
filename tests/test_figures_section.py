@@ -131,9 +131,9 @@ def test_the_real_world_bullet_names_the_figure() -> None:
 
     assert bullet is not None
     assert bullet.endswith("See Real-world example and [Figure 5](#figure-5).")
-    assert real_world_bullet(_real_world_summary(), None).endswith(  # type: ignore[union-attr]
-        "See Real-world example."
-    )
+    bullet = real_world_bullet(_real_world_summary(), None)
+    assert bullet is not None
+    assert bullet.endswith("See Real-world example.")
 
 
 def test_the_text_refers_to_the_figures_that_depict_it() -> None:

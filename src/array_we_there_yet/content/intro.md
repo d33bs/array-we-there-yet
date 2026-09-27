@@ -4,9 +4,9 @@ and embedding models make tables like this, with hundreds or thousands of
 columns. We call those numbers *features*.
 
 When you save a table like this, you have a choice. You can keep one column for
-each feature, like a spreadsheet. We call that a **wide** layout. Or you can pack
-all the features of a row into one field, like a short list. We call that an
-**array-like** layout.
+each feature, like a spreadsheet. This is often called a [**wide**](https://doi.org/10.1145/362384.362685) layout. Or you can pack
+all the features of a row into one field, like a short list. This is often called
+an [**array-like**](https://doi.org/10.1145/588111.588133) layout.
 
 <figure class="layout-diagram">
 <svg viewBox="0 0 640 136" role="img" aria-labelledby="layout-diagram-title" xmlns="http://www.w3.org/2000/svg">
@@ -58,16 +58,14 @@ all the features of a row into one field, like a short list. We call that an
 <figcaption>A wide layout gives each feature its own column. An array-like layout packs every feature of a row into one field.</figcaption>
 </figure>
 
-Does the choice matter? This page tests it in seven common storage formats: CSV,
+Does the choice matter? [No single layout serves every workload](https://doi.org/10.1109/ICDE.2005.1), so this page tests seven common storage formats: CSV,
 Parquet, DuckDB, Zarr, TileDB, Vortex, and Lance. It measures how long it takes
 to save, load, and slice the data, how big the files are, and what it costs to
-move them around. If you load features into NumPy or a model, or you share data
+move them around. If you load features into [NumPy](https://doi.org/10.1038/s41586-020-2649-2)
+or a model, or you share data
 with other people, the results can help you pick a layout.
 
-The fairest test compares each array-like layout with the wide layout in the
+The [fairest test](https://doi.org/10.1145/5666.5673) compares each array-like layout with the wide layout in the
 same format. We also show every layout against CSV wide, the most common way to
 share this kind of data. CSV is plain text, so those gains look bigger than they
 would against another binary format.
-
-New here? Read the summary first, then explore the figures. Click the key to
-focus on the formats you care about.
