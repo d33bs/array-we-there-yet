@@ -1,0 +1,12 @@
+include LICENSE
+include README.md
+include pyproject.toml
+
+graft src
+
+prune tests
+prune pages
+prune .github
+prune .agents
+
+global-exclude __pycache__ *.py[cod] .DS_Store

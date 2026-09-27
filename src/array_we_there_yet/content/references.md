@@ -1,0 +1,21 @@
+## References
+
+- [Apache Parquet file format](https://parquet.apache.org/docs/file-format/): row groups, column chunks, and the footer that lets a reader skip data.
+- [Apache Parquet encodings](https://parquet.apache.org/docs/file-format/data-pages/encodings/): the dictionary, run-length, and `BYTE_STREAM_SPLIT` encodings behind the write settings.
+- [Apache Arrow columnar format](https://arrow.apache.org/docs/format/Columnar.html): the `FixedSizeList` type that holds the array layout in Parquet, Vortex, and Lance.
+- [Zarr specifications](https://zarr-specs.readthedocs.io/): chunked arrays and their codecs.
+- [TileDB documentation](https://docs.tiledb.com/): dense arrays, tiles, and filters.
+- [DuckDB `ARRAY` type](https://duckdb.org/docs/sql/data_types/array): the fixed-size `FLOAT[N]` column.
+- [Vortex documentation](https://docs.vortex.dev/): the Vortex file format and its Python package.
+- [Lance documentation](https://lance.org/): the Lance file format and its Python package.
+- [NumPy `.npy` format](https://numpy.org/doc/stable/reference/generated/numpy.lib.format.html): the file behind the NumPy floor.
+- [Zstandard, RFC 8878](https://www.rfc-editor.org/rfc/rfc8878): the `zstd` codec in the compact profile.
+- [Blosc](https://www.blosc.org/): the chunk compressor that Zarr uses in the compact profile.
+- [HTTP range requests, RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html#name-range-requests): how a client asks for part of a file. The pricing pages for egress are listed in Real-world example.
+- Fleming, P. J. and Wallace, J. J. (1986). [How not to lie with statistics: the correct way to summarize benchmark results](https://doi.org/10.1145/5666.5673). *Communications of the ACM* 29(3), 218-221. This is the case for the geometric mean of ratios.
+- Codd, E. F. (1970). [A Relational Model of Data for Large Shared Data Banks](https://doi.org/10.1145/362384.362685). *Communications of the ACM* 13(6). First Normal Form's atomicity rule, the rule an array-valued cell sets aside.
+- Jaeschke, G., and Schek, H.-J. (1982). [Remarks on the Algebra of Non First Normal Form Relations](https://doi.org/10.1145/588111.588133). *ACM PODS*. The NF² model that first formalized relation-valued attributes.
+- Stonebraker, M., and Çetintemel, U. (2005). ["One Size Fits All": An Idea Whose Time Has Come and Gone](https://doi.org/10.1109/ICDE.2005.1). *ICDE*. The case for specialized storage engines instead of one layout for every workload.
+- Baumann, P., Misev, D., Merticariu, V., and Pham Huu, B. (2021). [Array Databases: Concepts, Standards, Implementations](https://doi.org/10.1186/s40537-020-00399-2). *Journal of Big Data* 8(1). The array-database tradition behind TileDB and Zarr.
+- Melnik, S., et al. (2010). [Dremel: Interactive Analysis of Web-Scale Datasets](https://doi.org/10.14778/1920841.1920886). *PVLDB* 3(1). The columnar encoding of nested fields that Parquet's array layout descends from.
+- Harris, C. R., et al. (2020). [Array programming with NumPy](https://doi.org/10.1038/s41586-020-2649-2). *Nature* 585. The `ndarray` that matrix materialization reconstructs.

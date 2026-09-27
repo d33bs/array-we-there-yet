@@ -1,0 +1,40 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+---
+cff-version: 1.2.0
+title: array-we-there-yet
+message: >-
+  If you use this software, please cite it using the
+  metadata from the CITATION.cff file.
+type: software
+authors:
+  - name: d33bs
+    orcid: "https://orcid.org/0000-0000-0000-0000"
+repository-code: "https://github.com/d33bs/array-we-there-yet"
+abstract: >-
+  Benchmarks for wide tables and fixed-size array layouts for high-dimensional profiles.
+keywords:
+  - python
+license: BSD-3-Clause
+references:
+  - type: software
+    title: "agent-skills"
+    authors:
+      - given-names: Addy
+        family-names: Osmani
+    repository-code: "https://github.com/addyosmani/agent-skills"
+    license: MIT
+  - type: software
+    title: "learning-opportunities"
+    authors:
+      - given-names: Dan
+        family-names: Hicks
+    repository-code: "https://github.com/DrCatHicks/learning-opportunities"
+    license: CC-BY-4.0
+  - type: software
+    title: "simple-english"
+    authors:
+      - given-names: Amin
+        family-names: Boulegroun
+    repository-code: "https://github.com/AminBlg/SimpleEnglish"
+    license: MIT
