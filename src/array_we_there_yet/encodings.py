@@ -12,7 +12,11 @@ import pyarrow.parquet as pq
 import tiledb
 
 FEATURE_COLUMN = "feature_0000"
-BLOSC_SHUFFLE_NAMES = {0: "no shuffle", 1: "byte shuffle", 2: "bit shuffle"}
+BLOSC_SHUFFLE_NAMES = {
+    "noshuffle": "no shuffle",
+    "shuffle": "byte shuffle",
+    "bitshuffle": "bit shuffle",
+}
 
 
 def describe_encoding(backend: str, layout: str, path: Path) -> str:
@@ -72,17 +76,30 @@ def _describe_duckdb(layout: str, path: Path) -> str:
 
 
 def _describe_zarr(layout: str, path: Path) -> str:
+    """Describe the codec that follows the array-to-bytes step, if there is one.
+
+    A Zarr v3 array lists its codecs in order: a serializer such as `bytes`,
+    then zero or more compressors. The last entry is what compresses the data.
+    """
     array_path = "features" if layout == "zarr_matrix" else f"features/{FEATURE_COLUMN}"
-    metadata = json.loads((path / array_path / ".zarray").read_text(encoding="utf-8"))
-    compressor = metadata.get("compressor")
-    if not compressor:
+    metadata = json.loads((path / array_path / "zarr.json").read_text(encoding="utf-8"))
+    compressors = [
+        codec for codec in metadata.get("codecs", []) if codec.get("name") != "bytes"
+    ]
+    if not compressors:
         return "uncompressed"
-    shuffle = BLOSC_SHUFFLE_NAMES.get(compressor.get("shuffle"), "unknown shuffle")
-    return (
-        f"Blosc {compressor['cname']} level {compressor['clevel']}, {shuffle}"
-        if compressor.get("id") == "blosc"
-        else str(compressor.get("id"))
-    )
+    codec = compressors[-1]
+    configuration = codec.get("configuration", {})
+    if codec.get("name") == "blosc":
+        shuffle = BLOSC_SHUFFLE_NAMES.get(
+            configuration.get("shuffle"), "unknown shuffle"
+        )
+        return (
+            f"Blosc {configuration['cname']} level {configuration['clevel']}, {shuffle}"
+        )
+    level = configuration.get("level")
+    name = str(codec.get("name"))
+    return f"{name} level {level}" if level is not None else name
 
 
 def _describe_tiledb(_: str, path: Path) -> str:

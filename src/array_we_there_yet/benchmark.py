@@ -27,7 +27,8 @@ import pyarrow.parquet as pq
 import tiledb
 import vortex as vx
 import zarr
-from numcodecs import Blosc, blosc
+from numcodecs import blosc
+from zarr.codecs import BloscCodec, BloscShuffle
 
 from array_we_there_yet.data import (
     BenchmarkDataset,
@@ -278,7 +279,7 @@ def run_benchmarks(config: BenchmarkConfig) -> pd.DataFrame:
     records: list[BenchmarkResult] = []
     floor: list[BenchmarkResult] = []
     encodings: list[dict[str, object]] = []
-    timestamp = pd.Timestamp.utcnow().isoformat()
+    timestamp = pd.Timestamp.now("UTC").isoformat()
     git_commit = _git_commit()
 
     for dimensions in config.dimensions:
@@ -1649,10 +1650,30 @@ def _read_duckdb_array_mixed(
 
 
 def _zarr_compressor(*, compact: bool) -> dict[str, Any]:
-    """Return `create_dataset` options: the library default or Blosc with zstd."""
+    """Return `create_array` options: the library default or Blosc with zstd."""
     if not compact:
         return {}
-    return {"compressor": Blosc(cname="zstd", clevel=5, shuffle=Blosc.SHUFFLE)}
+    return {
+        "compressors": BloscCodec(cname="zstd", clevel=5, shuffle=BloscShuffle.shuffle)
+    }
+
+
+def _zarr_array(node: zarr.Group, name: str) -> zarr.Array:
+    """Return a named child as an array, narrowing the `Array | Group` union."""
+    child = node[name]
+    if not isinstance(child, zarr.Array):
+        message = f"{name} is a Zarr group, not an array"
+        raise TypeError(message)
+    return child
+
+
+def _zarr_group(node: zarr.Group, name: str) -> zarr.Group:
+    """Return a named child as a group, narrowing the `Array | Group` union."""
+    child = node[name]
+    if not isinstance(child, zarr.Group):
+        message = f"{name} is a Zarr array, not a group"
+        raise TypeError(message)
+    return child
 
 
 def _write_zarr_wide(
@@ -1666,11 +1687,10 @@ def _write_zarr_wide(
     feature_group = root.create_group("features")
     chunks = (min(dataset.rows, 1024),)
     for index, name in enumerate(dataset.feature_names):
-        feature_group.create_dataset(
+        feature_group.create_array(
             name,
             data=dataset.matrix[:, index],
             chunks=chunks,
-            dtype="f4",
             **_zarr_compressor(compact=compact),
         )
     return Artifact(path=path, bytes=_artifact_size(path))
@@ -1684,41 +1704,44 @@ def _write_zarr_matrix(
 ) -> Artifact:
     root = zarr.open_group(str(path), mode="w")
     _write_zarr_metadata(root, dataset, layout="zarr_matrix")
-    root.create_dataset(
+    root.create_array(
         "features",
         data=dataset.matrix,
         chunks=(min(dataset.rows, 1024), min(dataset.dimensions, 1024)),
-        dtype="f4",
         **_zarr_compressor(compact=compact),
     )
     return Artifact(path=path, bytes=_artifact_size(path))
 
 
 def _write_zarr_metadata(
-    root: zarr.hierarchy.Group,
+    root: zarr.Group,
     dataset: BenchmarkDataset,
     *,
     layout: str,
 ) -> None:
     root.attrs["layout"] = layout
     root.attrs["feature_names"] = dataset.feature_names
-    root.create_dataset("feature_names", data=_string_values(dataset.feature_names))
+    names = _string_values(dataset.feature_names)
+    root.create_array("feature_names", data=names)
     for column in ["sample_id", "plate_id", "well_id"]:
-        root.create_dataset(column, data=_string_values(dataset.metadata[column]))
+        values = _string_values(dataset.metadata[column])
+        root.create_array(column, data=values)
 
 
 def _string_values(values: Iterable[object]) -> np.ndarray:
-    strings = [str(value) for value in values]
-    width = max(1, *(len(value) for value in strings))
-    return np.asarray(strings, dtype=f"U{width}")
+    """Return values as a variable-length string array with a stable Zarr v3 type.
+
+    A fixed-width unicode dtype triggers Zarr's UnstableSpecificationWarning.
+    """
+    return np.asarray([str(value) for value in values], dtype=np.dtypes.StringDType())
 
 
 def _read_zarr_wide_all(artifact: Artifact, dataset: BenchmarkDataset) -> pd.DataFrame:
     root = zarr.open_group(str(artifact.path), mode="r")
     data = _zarr_metadata_frame(root).to_dict(orient="list")
-    feature_group = root["features"]
+    feature_group = _zarr_group(root, "features")
     for name in dataset.feature_names:
-        data[name] = feature_group[name][:]
+        data[name] = _zarr_array(feature_group, name)[:]
     return pd.DataFrame(data)
 
 
@@ -1726,31 +1749,31 @@ def _read_zarr_matrix_all(artifact: Artifact, _: BenchmarkDataset) -> dict[str, 
     root = zarr.open_group(str(artifact.path), mode="r")
     return {
         "metadata": _zarr_metadata_frame(root),
-        "feature_names": root["feature_names"][:],
-        "features": root["features"][:],
+        "feature_names": _zarr_array(root, "feature_names")[:],
+        "features": _zarr_array(root, "features")[:],
     }
 
 
-def _zarr_metadata_frame(root: zarr.hierarchy.Group) -> pd.DataFrame:
+def _zarr_metadata_frame(root: zarr.Group) -> pd.DataFrame:
     return pd.DataFrame(
         {
-            "sample_id": root["sample_id"][:],
-            "plate_id": root["plate_id"][:],
-            "well_id": root["well_id"][:],
+            "sample_id": _zarr_array(root, "sample_id")[:],
+            "plate_id": _zarr_array(root, "plate_id")[:],
+            "well_id": _zarr_array(root, "well_id")[:],
         }
     )
 
 
 def _read_zarr_wide_matrix(artifact: Artifact, dataset: BenchmarkDataset) -> np.ndarray:
     root = zarr.open_group(str(artifact.path), mode="r")
-    feature_group = root["features"]
-    columns = [feature_group[name][:] for name in dataset.feature_names]
+    feature_group = _zarr_group(root, "features")
+    columns = [_zarr_array(feature_group, name)[:] for name in dataset.feature_names]
     return np.column_stack(columns).astype(np.float32, copy=False)
 
 
 def _read_zarr_matrix(artifact: Artifact, _: BenchmarkDataset) -> np.ndarray:
     root = zarr.open_group(str(artifact.path), mode="r")
-    return np.asarray(root["features"][:], dtype=np.float32)
+    return np.asarray(_zarr_array(root, "features")[:], dtype=np.float32)
 
 
 def _read_zarr_wide_rows(
@@ -1759,8 +1782,10 @@ def _read_zarr_wide_rows(
     rows: np.ndarray,
 ) -> np.ndarray:
     root = zarr.open_group(str(artifact.path), mode="r")
-    feature_group = root["features"]
-    columns = [feature_group[name].oindex[rows] for name in dataset.feature_names]
+    feature_group = _zarr_group(root, "features")
+    columns = [
+        _zarr_array(feature_group, name).oindex[rows] for name in dataset.feature_names
+    ]
     return np.column_stack(columns).astype(np.float32, copy=False)
 
 
@@ -1770,7 +1795,7 @@ def _read_zarr_matrix_rows(
     rows: np.ndarray,
 ) -> np.ndarray:
     root = zarr.open_group(str(artifact.path), mode="r")
-    return np.asarray(root["features"].oindex[rows, :], dtype=np.float32)
+    return np.asarray(_zarr_array(root, "features").oindex[rows, :], dtype=np.float32)
 
 
 def _read_zarr_wide_features(
@@ -1779,9 +1804,9 @@ def _read_zarr_wide_features(
     features: np.ndarray,
 ) -> np.ndarray:
     root = zarr.open_group(str(artifact.path), mode="r")
-    feature_group = root["features"]
+    feature_group = _zarr_group(root, "features")
     names = [dataset.feature_names[index] for index in features]
-    columns = [feature_group[name][:] for name in names]
+    columns = [_zarr_array(feature_group, name)[:] for name in names]
     return np.column_stack(columns).astype(np.float32, copy=False)
 
 
@@ -1792,10 +1817,10 @@ def _read_zarr_wide_mixed(
     features: np.ndarray,
 ) -> pd.DataFrame:
     root = zarr.open_group(str(artifact.path), mode="r")
-    feature_group = root["features"]
+    feature_group = _zarr_group(root, "features")
     names = _feature_names(dataset, features)
     metadata = _zarr_metadata_frame(root).iloc[rows]
-    columns = [feature_group[name].oindex[rows] for name in names]
+    columns = [_zarr_array(feature_group, name).oindex[rows] for name in names]
     return _mixed_frame(
         metadata=metadata,
         matrix=np.column_stack(columns).astype(np.float32, copy=False),
@@ -1810,7 +1835,7 @@ def _read_zarr_matrix_features(
     features: np.ndarray,
 ) -> np.ndarray:
     root = zarr.open_group(str(artifact.path), mode="r")
-    return np.asarray(root["features"][:, features], dtype=np.float32)
+    return np.asarray(_zarr_array(root, "features")[:, features], dtype=np.float32)
 
 
 def _read_zarr_matrix_mixed(
@@ -1821,7 +1846,9 @@ def _read_zarr_matrix_mixed(
 ) -> pd.DataFrame:
     root = zarr.open_group(str(artifact.path), mode="r")
     metadata = _zarr_metadata_frame(root).iloc[rows]
-    matrix = np.asarray(root["features"].oindex[rows, features], dtype=np.float32)
+    matrix = np.asarray(
+        _zarr_array(root, "features").oindex[rows, features], dtype=np.float32
+    )
     return _mixed_frame(
         metadata=metadata,
         matrix=matrix,
