@@ -15,6 +15,8 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: 3.15",
 ]
 dynamic = [ "version" ]
 dependencies = [
@@ -50,21 +52,17 @@ notebooks = [
 ]
 
 [tool.setuptools]
+packages.find.where = [ "src" ]
+packages.find.include = [ "array_we_there_yet*" ]
 package-dir = { "" = "src" }
 include-package-data = true
-
-[tool.setuptools.package-data]
-array_we_there_yet = [ "content/*.md", "site/*" ]
-
-[tool.setuptools.packages.find]
-where = [ "src" ]
-include = [ "array_we_there_yet*" ]
+package-data.array_we_there_yet = [ "content/*.md", "site/*" ]
 
 [tool.setuptools_scm]
-root = "."
+version_file = "src/array_we_there_yet/_version.py"
 version_scheme = "no-guess-dev"
 local_scheme = "no-local-version"
-version_file = "src/array_we_there_yet/_version.py"
+root = "."
 
 [tool.ruff]
 target-version = "py311"
@@ -96,43 +94,41 @@ lint.select = [
 # Ignore `F401` (unused imports) for `__init__.py` file
 lint.per-file-ignores."__init__.py" = [ "F401" ]
 lint.per-file-ignores."src/array_we_there_yet/benchmark.py" = [ "PLR0913" ]
-lint.per-file-ignores."src/array_we_there_yet/cli.py" = [ "PLR0913" ]
+lint.per-file-ignores."src/array_we_there_yet/cli.py" = [ "PLR0913", "PLR0917" ]
 lint.per-file-ignores."src/array_we_there_yet/main.py" = [ "PLR0913" ]
 
-[tool.pytest.ini_options]
-pythonpath = [ "." ]
-addopts = [
+[tool.vulture]
+paths = [ "src/array_we_there_yet", "tests" ]
+min_confidence = 90
+
+[tool.pytest]
+ini_options.pythonpath = [ "." ]
+ini_options.addopts = [
   "--cov=array_we_there_yet",
   "--cov-report=term-missing",
   "--cov-report=xml",
 ]
 
-[tool.coverage.run]
-branch = true
-source = [ "src/array_we_there_yet" ]
+[tool.coverage]
+run.source = [ "src/array_we_there_yet" ]
+run.branch = true
+report.skip_covered = true
+report.show_missing = true
 
-[tool.coverage.report]
-show_missing = true
-skip_covered = true
-
-[tool.poe.tasks]
+[tool.poe]
 # tasks for development environments
-test.shell = """
+tasks.test.shell = """
 pytest
 """
-lint.shell = """
+tasks.lint.shell = """
 pre-commit run --all-files
 """
-pipeline.shell = """
+tasks.pipeline.shell = """
 pre-commit run --all-files && pytest
 """
-jupyter.shell = """
+tasks.jupyter.shell = """
 jupyter lab
 """
 
 [tool.jupytext]
 formats = "ipynb,py:light"
-
-[tool.vulture]
-min_confidence = 90
-paths = [ "src/array_we_there_yet", "tests" ]

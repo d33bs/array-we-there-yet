@@ -3,6 +3,8 @@
 from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from array_we_there_yet.benchmark import BenchmarkConfig, run_benchmarks
@@ -118,9 +120,6 @@ def test_scaling_check_measures_every_layout_of_the_example(tmp_path: Path) -> N
 
 def test_parquet_read_bytes_for_every_column_is_the_file_size(tmp_path: Path) -> None:
     """Footer, column chunks, and framing add up to the whole file."""
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-
     table = pa.table({f"feature_{i}": [float(i)] * 200 for i in range(20)})
     path = tmp_path / "wide.parquet"
     pq.write_table(table, path)
@@ -130,9 +129,6 @@ def test_parquet_read_bytes_for_every_column_is_the_file_size(tmp_path: Path) ->
 
 def test_parquet_read_bytes_for_some_columns_is_smaller(tmp_path: Path) -> None:
     """Reading two of twenty columns downloads the footer and two column chunks."""
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-
     table = pa.table(
         {f"feature_{i}": [float(i) * 1.5 + j for j in range(2000)] for i in range(20)}
     )

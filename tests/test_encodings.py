@@ -3,6 +3,8 @@
 from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from array_we_there_yet.benchmark import LayoutRunner, layout_runners
@@ -61,9 +63,6 @@ def test_describe_encoding_sees_gzip_csv(tmp_path: Path) -> None:
 
 def test_parquet_encoding_reports_the_number_of_row_groups(tmp_path: Path) -> None:
     """Row groups decide whether row selection can skip any data."""
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-
     table = pa.table({"feature_0000": [float(i) for i in range(300)]})
     one = tmp_path / "one.parquet"
     several = tmp_path / "several.parquet"
