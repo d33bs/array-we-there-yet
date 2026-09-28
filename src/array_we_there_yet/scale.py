@@ -116,7 +116,7 @@ def run_scaling_check(
     dataset = make_synthetic_dataset(rows=rows, dimensions=dimensions, seed=config.seed)
     picks = np.arange(min(8, rows))
     features = np.arange(min(8, dimensions))
-    timestamp = pd.Timestamp.utcnow().isoformat()
+    timestamp = pd.Timestamp.now("UTC").isoformat()
     commit = _git_commit()
 
     records: list[BenchmarkResult] = []

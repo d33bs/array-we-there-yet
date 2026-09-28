@@ -51,7 +51,9 @@ def assert_mixed_retrieval(
 
     actual_metadata = actual[dataset.metadata.columns].reset_index(drop=True)
     expected_rows = dataset.metadata.iloc[rows].reset_index(drop=True)
-    pd.testing.assert_frame_equal(actual_metadata, expected_rows)
+    # Backends return their own string dtype (object, Arrow-backed, pandas'
+    # StringDtype). This checks the values, not that storage detail.
+    pd.testing.assert_frame_equal(actual_metadata, expected_rows, check_dtype=False)
 
     names = [dataset.feature_names[index] for index in features]
     actual_matrix = actual[names].to_numpy(dtype=np.float32)
