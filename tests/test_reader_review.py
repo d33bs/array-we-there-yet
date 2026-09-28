@@ -26,12 +26,12 @@ def test_quote_gives_the_range_and_leaves_the_detail_to_the_bullets() -> None:
     quote = next(line for line in lines if line.startswith("> "))
     assert quote == (
         "> **Main finding.** Array-like layouts read whole feature matrices 4x to "
-        "1,000x faster than wide layouts in 2 of 3 backends. Reading only 8 "
-        "features gives mixed results."
+        "1,000x faster than wide layouts in 2 of 3 backends. Reading only 8 of "
+        "16 features with the array-like layout gives mixed results."
     )
     text = "\n".join(lines)
-    assert "faster in Lance (10x)" in text
-    assert text.count("faster in Lance (10x)") == 1
+    assert "faster with the array-like layout in Lance (10x)" in text
+    assert text.count("faster with the array-like layout in Lance (10x)") == 1
 
 
 def test_real_world_bullet_states_time_and_egress_per_use() -> None:
@@ -233,6 +233,6 @@ def test_the_static_sections_define_both_operations_in_plain_words() -> None:
     terminology = static_section("terminology")
 
     assert "Read every value into one `N x D` NumPy array" in operations
-    assert "Read only a few chosen features and skip the rest." in operations
+    assert "Read only a few chosen features and skip the rest" in operations
     assert "| Feature projection" in terminology
     assert "| Matrix materialization" in terminology

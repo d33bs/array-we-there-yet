@@ -928,12 +928,19 @@ def _feature_projection_note(summary: pd.DataFrame, dimensions: int) -> str:
 
 
 def _feature_count_text(summary: pd.DataFrame) -> str:
-    """Return the number of projected features, or a vague phrase."""
+    """Return the projected feature count out of the total, or a vague phrase.
+
+    For example, "8 of 8,192 features", so a reader never has to guess what
+    the smaller number is a fraction of.
+    """
     values = summary[summary["operation"] == "feature_projection"][
         "operation_parameter"
     ]
     digits = [value for value in values if str(value).isdigit()]
-    return f"{digits[0]} features" if digits else "a few features"
+    if not digits:
+        return "a few features"
+    dimensions = int(summary["dimensions"].max())
+    return f"{digits[0]} of {dimensions:,} features"
 
 
 PLAIN_OPERATIONS = (
@@ -1027,7 +1034,10 @@ def _main_finding(
         return text
     parts = [f"{name} in {_join_words(items)}" for name, items in groups.items()]
     if len(parts) > 1:
-        return f"{text} Reading only {features} gives mixed results."
+        return (
+            f"{text} Reading only {features} with the array-like layout gives "
+            "mixed results."
+        )
     return f"{text} Reading only {features}, array-like layouts are {parts[0]}."
 
 
@@ -1056,7 +1066,11 @@ def _projection_bullet(groups: dict[str, list[str]], features: str) -> str:
     sentences = [
         f"It is {name} in {_join_words(items)}." for name, items in groups.items()
     ]
-    first = sentences[0].replace("It is", f"Reading {features} is", 1)
+    first_name, first_items = next(iter(groups.items()))
+    first = (
+        f"Reading {features} is {first_name} with the array-like layout in "
+        f"{_join_words(first_items)}."
+    )
     return "- **Selecting a few features.** " + " ".join([first, *sentences[1:]])
 
 

@@ -142,8 +142,8 @@ def test_summary_section_leads_with_the_main_finding_as_a_quote() -> None:
     quote = next(line for line in lines if line.startswith("> "))
     assert quote == (
         "> **Main finding.** Array-like layouts read whole feature matrices 4x to "
-        "1,000x faster than wide layouts in 2 of 3 backends. Reading only 8 "
-        "features gives mixed results."
+        "1,000x faster than wide layouts in 2 of 3 backends. Reading only 8 of "
+        "16 features with the array-like layout gives mixed results."
     )
     quote_position = 2
     assert lines.index(quote) == quote_position
@@ -159,9 +159,9 @@ def test_summary_section_backs_the_finding_with_concrete_bullets() -> None:
         "CSV (1.5x)."
     ) in text
     assert (
-        "- **Selecting a few features.** Reading 8 features is faster in Lance "
-        "(10x). It is about the same in Parquet. It is slower in CSV "
-        "(5x)."
+        "- **Selecting a few features.** Reading 8 of 16 features is faster "
+        "with the array-like layout in Lance (10x). It is about the same in "
+        "Parquet. It is slower in CSV (5x)."
     ) in text
     assert (
         "- **Text packing.** CSV packed arrays are slower than CSV wide for write, "
