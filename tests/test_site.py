@@ -331,3 +331,12 @@ def test_the_first_four_paragraphs_link_to_sources_also_in_references() -> None:
         assert doi in references, doi
         if term:
             assert f"[{term}]({doi})" in body, term
+
+
+def test_the_page_has_a_squared_plus_favicon() -> None:
+    """The tab icon is an inline SVG of the chosen emoji, no image file needed."""
+    page = _page()
+
+    assert '<link rel="icon"' in page
+    assert "⊞" in page
+    assert "data:image/svg+xml" in page
