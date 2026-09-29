@@ -1,6 +1,7 @@
 {
   "config": {
-    "artifact_dir": "results/artifacts",
+    "artifact_dir": "results_a/artifacts",
+    "csv_max_rows": null,
     "dimensions": [
       256,
       512,
@@ -10,7 +11,6 @@
       8192
     ],
     "feature_projection_count": 8,
-    "figure_dir": "figures_a",
     "measured_repetitions": 3,
     "output_dir": "results_a",
     "random_row_count": 128,
@@ -19,7 +19,7 @@
     "threads": 1,
     "warmups": 1
   },
-  "git_commit": "80a73b6",
+  "git_commit": "46a5945",
   "hardware": {
     "cpu_model": "Apple M4 Pro",
     "logical_cores": 12,
@@ -28,8 +28,8 @@
   "packages": {
     "duckdb": "1.5.5",
     "lance": "12.0.0",
-    "numpy": "2.2.6",
-    "pandas": "2.2.3",
+    "numpy": "2.4.6",
+    "pandas": "3.0.5",
     "pyarrow": "25.0.1",
     "tiledb": [
       0,
@@ -37,7 +37,7 @@
       1
     ],
     "vortex": "0.86.1",
-    "zarr": "2.18.7"
+    "zarr": "3.1.6"
   },
   "platform": "macOS-26.7-arm64-arm-64bit",
   "processor": "arm",

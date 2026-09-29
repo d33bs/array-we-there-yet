@@ -38,7 +38,9 @@
   A measurement that varies by more than half of its median is marked with `*`.
   Pooling refuses runs from different commits or from uncommitted code.
 - **Threads.** The benchmark asks for one thread. It enforces this for Arrow,
-  DuckDB, TileDB, and the Blosc compressor that Zarr uses. Lance and Vortex use
+  DuckDB, and TileDB. Zarr 3 loads chunks in its own thread pool. The Blosc
+  thread setting does not cap that pool, so Zarr can use more than one
+  thread. Lance and Vortex use
   native thread pools that the benchmark cannot limit. The `median_parallelism`
   column in `results/summary.parquet` is the CPU time divided by the wall time. A
   value near 1.0 means one thread was busy. A larger value means more than one.
