@@ -262,6 +262,9 @@ def _environment() -> dict:
             "arrow_cpu_threads": 1,
             "arrow_io_threads": 1,
             "duckdb_threads": 1,
+            "zarr_blosc_threads": 1,
+            "zarr_async_threads": 1,
+            "tiledb_concurrency_level": 1,
             "lance": "library default",
             "vortex": "library default",
         },
@@ -278,8 +281,8 @@ def test_environment_table_puts_the_thread_limits_in_one_row() -> None:
     assert "| `tiledb` | 0.36.1 |" in table
     assert table.count("Thread limit") == 0
     assert (
-        "| Threads | Arrow CPU 1, Arrow I/O 1, DuckDB 1; "
-        "Lance and Vortex use their library defaults |"
+        "| Threads | Arrow CPU 1, Arrow I/O 1, DuckDB 1, Zarr Blosc 1, "
+        "Zarr chunks 1, TileDB 1; Lance and Vortex use their library defaults |"
     ) in table
 
 

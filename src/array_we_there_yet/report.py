@@ -61,6 +61,7 @@ THREAD_LABELS = {
     "duckdb_threads": "DuckDB",
     "tiledb_concurrency_level": "TileDB",
     "zarr_blosc_threads": "Zarr Blosc",
+    "zarr_async_threads": "Zarr chunks",
     "lance": "Lance",
     "vortex": "Vortex",
 }

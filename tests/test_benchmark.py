@@ -12,6 +12,7 @@ import pandas as pd
 import pyarrow as pa
 import pytest
 from numcodecs import blosc
+from zarr.core.config import config as zarr_config
 
 from array_we_there_yet import benchmark
 from array_we_there_yet.benchmark import (
@@ -113,6 +114,10 @@ def test_layout_runners_compare_array_native_formats_without_arrow_ipc() -> None
 def test_apply_thread_limits_caps_arrow_thread_pools() -> None:
     """Arrow reads and writes use the configured number of threads."""
     cpu_count, io_count = pa.cpu_count(), pa.io_thread_count()
+    zarr_before = {
+        "async.concurrency": zarr_config.get("async.concurrency"),
+        "threading.max_workers": zarr_config.get("threading.max_workers"),
+    }
     try:
         limits = apply_thread_limits(1)
 
@@ -129,6 +134,28 @@ def test_apply_thread_limits_caps_arrow_thread_pools() -> None:
         pa.set_cpu_count(cpu_count)
         pa.set_io_thread_count(io_count)
         blosc.use_threads = None
+        zarr_config.set(zarr_before)
+
+
+def test_apply_thread_limits_caps_zarr_thread_pools() -> None:
+    """Zarr chunk loading and its sync executor honor the thread limit.
+
+    Zarr 3 loads and decodes chunks through its own pool. The Blosc thread
+    setting does not cap that pool, so the limit must go through the zarr
+    config.
+    """
+    concurrency = zarr_config.get("async.concurrency")
+    max_workers = zarr_config.get("threading.max_workers")
+    threads = 2
+    try:
+        apply_thread_limits(threads)
+
+        assert zarr_config.get("async.concurrency") == threads
+        assert zarr_config.get("threading.max_workers") == threads
+    finally:
+        zarr_config.set(
+            {"async.concurrency": concurrency, "threading.max_workers": max_workers}
+        )
 
 
 def test_hardware_info_describes_the_machine() -> None:

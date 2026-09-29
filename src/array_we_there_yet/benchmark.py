@@ -2178,8 +2178,10 @@ _thread_limit = 1
 def apply_thread_limits(threads: int) -> dict[str, int | str]:
     """Limit thread pools that the libraries expose and report what was set.
 
-    Lance and Vortex run their own native runtimes. This function cannot cap
-    them, so the measured CPU time in the results shows their real parallelism.
+    Zarr 3 loads and decodes chunks through its own pool, so its limit goes
+    through the zarr config, not the Blosc thread setting. Lance and Vortex
+    run their own native runtimes. This function cannot cap them, so the
+    measured CPU time in the results shows their real parallelism.
     """
     global _thread_limit  # noqa: PLW0603
     _thread_limit = threads
@@ -2187,6 +2189,7 @@ def apply_thread_limits(threads: int) -> dict[str, int | str]:
     pa.set_io_thread_count(threads)
     blosc.set_nthreads(threads)
     blosc.use_threads = threads > 1
+    zarr.config.set({"async.concurrency": threads, "threading.max_workers": threads})
     with contextlib.suppress(tiledb.TileDBError):
         # The default context can be set once per process.
         tiledb.default_ctx(
@@ -2203,6 +2206,7 @@ def apply_thread_limits(threads: int) -> dict[str, int | str]:
         "arrow_io_threads": pa.io_thread_count(),
         "duckdb_threads": threads,
         "zarr_blosc_threads": threads,
+        "zarr_async_threads": zarr.config.get("async.concurrency"),
         "tiledb_concurrency_level": tiledb_level,
         "lance": "library default",
         "vortex": "library default",
