@@ -24,9 +24,8 @@
     return node;
   }
 
-  // A black line disappears on a dark page, so black follows the text color.
   function plotColor(color) {
-    return color === '#000000' ? css('--text') : color;
+    return color;
   }
 
   function visible(item) {
@@ -475,7 +474,7 @@
       var chipRow = el('span', { 'class': 'chips' });
       group.appendChild(chipRow);
       DATA.layouts.filter(function (layout) { return layout.backend === backend.id; }).forEach(function (layout) {
-        var stroke = layout.color === '#000000' ? 'currentColor' : layout.color;
+        var stroke = layout.color;
         var svg = '<svg width="26" height="10" aria-hidden="true"><line x1="1" y1="5" x2="25" y2="5" stroke="' + stroke +
           '" stroke-width="2.5"' + (layout.dash === 'dash' ? ' stroke-dasharray="6 4"' : '') + '/></svg>';
         var chip = el('button', { type: 'button', 'class': 'chip', 'aria-pressed': 'true', title: layout.label, html: svg });
