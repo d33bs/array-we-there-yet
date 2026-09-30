@@ -1,6 +1,6 @@
 {
   "config": {
-    "artifact_dir": "results_a/artifacts",
+    "artifact_dir": "results/artifacts",
     "csv_max_rows": null,
     "dimensions": [
       256,
@@ -19,7 +19,7 @@
     "threads": 1,
     "warmups": 1
   },
-  "git_commit": "46a5945",
+  "git_commit": "33e33fd",
   "hardware": {
     "cpu_model": "Apple M4 Pro",
     "logical_cores": 12,
@@ -39,7 +39,7 @@
     "vortex": "0.86.1",
     "zarr": "3.1.6"
   },
-  "platform": "macOS-26.7-arm64-arm-64bit",
+  "platform": "macOS-26.7.1-arm64-arm-64bit",
   "processor": "arm",
   "python": "3.11.13",
   "runs": 2,
@@ -50,6 +50,7 @@
     "lance": "library default",
     "tiledb_concurrency_level": 1,
     "vortex": "library default",
+    "zarr_async_threads": 1,
     "zarr_blosc_threads": 1
   }
 }
