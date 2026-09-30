@@ -243,7 +243,7 @@ would against another binary format.</p>
 <li>Ratio panels divide one result by a reference result. A value of 1.0 means the same as the reference.</li>
 <li>Geometric Mean Time is the geometric mean of the time ratios across all operations. The geometric mean is the standard way to average ratios (see References).</li>
 <li>Error bars show the q25-to-q75 range across repetitions.</li>
-<li>The y-axis uses a log scale to show small and large changes.</li>
+<li>The y-axis uses a log scale by default to show small and large changes. Use the Log scale control to switch the overview and explorer plots to a linear scale.</li>
 <li>Dashed lines are wide layouts. Solid lines are array-like layouts.</li>
 <li>Click a layout in the key to hide or show it in every figure. Click a backend name to hide or show all of its layouts. Hover over a point to read its value.</li>
 </ul>
@@ -1754,6 +1754,10 @@ schema changes, vector search, or tool support.</li>
     }
   }
 
+  function yAxisTitle(layout, label) {
+    return label + (layout.yaxis.type === 'log' ? ' (log scale)' : '');
+  }
+
   function shell(container, draw) {
     container.classList.add('ready');
     redraws.push(draw);
@@ -1782,8 +1786,8 @@ schema changes, vector search, or tool support.</li>
         layout.xaxis.ticktext = dims.map(String);
         layout.xaxis.title = { text: 'Feature count', standoff: 4 };
         layout.yaxis.type = state.logY ? 'log' : 'linear';
-        layout.yaxis.title = { text: yLabel, standoff: 4 };
         keepTidy(layout, traces, dims);
+        layout.yaxis.title = { text: yAxisTitle(layout, yLabel), standoff: 4 };
         Plotly.react(entry.cell, traces, layout, CONFIG);
       });
     });
@@ -1806,9 +1810,9 @@ schema changes, vector search, or tool support.</li>
         var layout = baseLayout(entry.panel.title);
         layout.xaxis.title = { text: 'Rows', standoff: 4 };
         layout.yaxis.type = 'log';
-        layout.yaxis.title = { text: 'Median seconds', standoff: 4 };
         var rowValues = entry.panel.series.length ? entry.panel.series[0].x : [];
         keepTidy(layout, traces, rowValues);
+        layout.yaxis.title = { text: yAxisTitle(layout, 'Median seconds'), standoff: 4 };
         Plotly.react(entry.cell, traces, layout, CONFIG);
       });
     });
@@ -1853,8 +1857,8 @@ schema changes, vector search, or tool support.</li>
         layout.xaxis.type = 'log';
         layout.xaxis.title = { text: 'Storage size (x raw float32)', standoff: 4 };
         layout.yaxis.type = 'log';
-        layout.yaxis.title = { text: 'Median seconds', standoff: 4 };
         if (!traces.length) keepTidy(layout, traces, [1, 10]);
+        layout.yaxis.title = { text: yAxisTitle(layout, 'Median seconds'), standoff: 4 };
         Plotly.react(entry.cell, traces, layout, CONFIG);
       });
     });
@@ -1918,8 +1922,8 @@ schema changes, vector search, or tool support.</li>
       layout.xaxis.ticktext = dims.map(String);
       layout.xaxis.title = { text: 'Feature count', standoff: 4 };
       layout.yaxis.type = state.logY ? 'log' : 'linear';
-      layout.yaxis.title = { text: isSize ? 'Storage size (bytes)' : 'Median seconds', standoff: 4 };
       keepTidy(layout, traces, dims.length ? dims : spec.rows.map(function (row) { return row.dimensions; }));
+      layout.yaxis.title = { text: yAxisTitle(layout, isSize ? 'Storage size (bytes)' : 'Median seconds'), standoff: 4 };
       Plotly.react(plot, traces, layout, CONFIG);
     }
     operation.addEventListener('change', draw);
