@@ -196,6 +196,25 @@ def test_the_script_is_valid_javascript() -> None:
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node is not installed")
+def test_y_axis_titles_name_the_log_scale_only_when_used(tmp_path: Path) -> None:
+    """Axis titles follow the scale toggle and empty-panel placeholder axes."""
+    page = tmp_path / "report.html"
+    page.write_text(_page(_sweep()), encoding="utf-8")
+    result = subprocess.run(
+        [
+            str(shutil.which("node")),
+            str(Path(__file__).with_name("axis_scale.js")),
+            str(page),
+            str(ASSET_DIR / "report.js"),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_the_intro_explains_the_idea_in_plain_words_for_a_newcomer() -> None:
     """A data scientist or generalist can follow it without the jargon first."""
     intro = static_section("intro")

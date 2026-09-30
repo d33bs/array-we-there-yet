@@ -660,7 +660,9 @@ def _figures_section(summary: pd.DataFrame, numbers: dict[str, int]) -> list[str
             "to average ratios (see References)."
         ),
         "- Error bars show the q25-to-q75 range across repetitions.",
-        "- The y-axis uses a log scale to show small and large changes.",
+        "- The y-axis uses a log scale by default to show small and large changes. "
+        "Use the Log scale control to switch the overview and explorer plots "
+        "to a linear scale.",
         "- Dashed lines are wide layouts. Solid lines are array-like layouts.",
         (
             "- Click a layout in the key to hide or show it in every figure. "

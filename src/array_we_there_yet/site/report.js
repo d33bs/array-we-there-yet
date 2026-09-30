@@ -118,6 +118,10 @@
     }
   }
 
+  function yAxisTitle(layout, label) {
+    return label + (layout.yaxis.type === 'log' ? ' (log scale)' : '');
+  }
+
   function shell(container, draw) {
     container.classList.add('ready');
     redraws.push(draw);
@@ -146,8 +150,8 @@
         layout.xaxis.ticktext = dims.map(String);
         layout.xaxis.title = { text: 'Feature count', standoff: 4 };
         layout.yaxis.type = state.logY ? 'log' : 'linear';
-        layout.yaxis.title = { text: yLabel, standoff: 4 };
         keepTidy(layout, traces, dims);
+        layout.yaxis.title = { text: yAxisTitle(layout, yLabel), standoff: 4 };
         Plotly.react(entry.cell, traces, layout, CONFIG);
       });
     });
@@ -170,9 +174,9 @@
         var layout = baseLayout(entry.panel.title);
         layout.xaxis.title = { text: 'Rows', standoff: 4 };
         layout.yaxis.type = 'log';
-        layout.yaxis.title = { text: 'Median seconds', standoff: 4 };
         var rowValues = entry.panel.series.length ? entry.panel.series[0].x : [];
         keepTidy(layout, traces, rowValues);
+        layout.yaxis.title = { text: yAxisTitle(layout, 'Median seconds'), standoff: 4 };
         Plotly.react(entry.cell, traces, layout, CONFIG);
       });
     });
@@ -217,8 +221,8 @@
         layout.xaxis.type = 'log';
         layout.xaxis.title = { text: 'Storage size (x raw float32)', standoff: 4 };
         layout.yaxis.type = 'log';
-        layout.yaxis.title = { text: 'Median seconds', standoff: 4 };
         if (!traces.length) keepTidy(layout, traces, [1, 10]);
+        layout.yaxis.title = { text: yAxisTitle(layout, 'Median seconds'), standoff: 4 };
         Plotly.react(entry.cell, traces, layout, CONFIG);
       });
     });
@@ -282,8 +286,8 @@
       layout.xaxis.ticktext = dims.map(String);
       layout.xaxis.title = { text: 'Feature count', standoff: 4 };
       layout.yaxis.type = state.logY ? 'log' : 'linear';
-      layout.yaxis.title = { text: isSize ? 'Storage size (bytes)' : 'Median seconds', standoff: 4 };
       keepTidy(layout, traces, dims.length ? dims : spec.rows.map(function (row) { return row.dimensions; }));
+      layout.yaxis.title = { text: yAxisTitle(layout, isSize ? 'Storage size (bytes)' : 'Median seconds'), standoff: 4 };
       Plotly.react(plot, traces, layout, CONFIG);
     }
     operation.addEventListener('change', draw);
