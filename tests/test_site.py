@@ -196,6 +196,23 @@ def test_the_script_is_valid_javascript() -> None:
     assert result.returncode == 0, result.stderr
 
 
+def test_report_text_and_diagram_fonts_gain_one_point() -> None:
+    """The small text and SVG diagram grow with the main report copy."""
+    css = (ASSET_DIR / "report.css").read_text(encoding="utf-8")
+    assert "font-size: calc(100% + 1pt)" in css
+    assert "font: 1rem/1.6" in css
+    for size in ("13", "11", "12", "10.5"):
+        assert f"font-size: calc({size}px + 1pt)" in css
+
+
+def test_title_has_more_room_before_the_intro() -> None:
+    """The masthead leaves a readable gap under the title row."""
+    css = (ASSET_DIR / "report.css").read_text(encoding="utf-8")
+    title_row = re.search(r"\.masthead-top\s*\{([^}]*)\}", css)
+    assert title_row is not None
+    assert "margin-bottom: 1rem" in title_row.group(1)
+
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node is not installed")
 def test_y_axis_titles_name_the_log_scale_only_when_used(tmp_path: Path) -> None:
     """Axis titles follow the scale toggle and empty-panel placeholder axes."""

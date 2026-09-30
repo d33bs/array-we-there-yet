@@ -70,6 +70,11 @@ function assertTitles() {
 }
 assert.ok(plotted.some(({ layout }) => layout.yaxis.type === 'log'));
 assertTitles();
+for (const { layout } of plotted) {
+  assert.ok(layout.font.size >= 12.3, 'plot labels should be about one point larger');
+  assert.ok(layout.title.font.size >= 14.3, 'plot titles should be about one point larger');
+  if (layout.legend?.font?.size) assert.ok(layout.legend.font.size >= 12.3);
+}
 
 const logBox = created.find(node => node.tag === 'input' && node.id === 'log-y');
 assert.ok(logBox);

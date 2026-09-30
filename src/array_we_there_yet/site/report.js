@@ -6,6 +6,7 @@
   var state = { logY: true };
   var redraws = []; // functions that draw one figure
   var CONFIG = { responsive: true, displaylogo: false, modeBarButtonsToRemove: ['lasso2d', 'select2d'] };
+  var FONT_BUMP = 4 / 3; // one typographic point in CSS pixels
 
   // ---------- helpers ----------
 
@@ -59,12 +60,12 @@
     var text = css('--text');
     var grid = css('--grid');
     return {
-      title: { text: title, font: { size: 13, color: text } },
+      title: { text: title, font: { size: 13 + FONT_BUMP, color: text } },
       margin: { l: 58, r: 10, t: 36, b: 46 },
       height: 290,
       paper_bgcolor: 'rgba(0,0,0,0)',
       plot_bgcolor: 'rgba(0,0,0,0)',
-      font: { color: text, size: 11 },
+      font: { color: text, size: 11 + FONT_BUMP },
       showlegend: false,
       hovermode: 'closest',
       xaxis: { gridcolor: grid, linecolor: grid, zerolinecolor: grid },
@@ -113,7 +114,7 @@
       layout.yaxis.showticklabels = false;
       layout.annotations = [{
         text: 'No layouts shown', showarrow: false, xref: 'paper', yref: 'paper', x: 0.5, y: 0.5,
-        font: { color: css('--muted'), size: 12 }
+        font: { color: css('--muted'), size: 12 + FONT_BUMP }
       }];
     }
   }
@@ -279,7 +280,7 @@
       var layout = baseLayout(title);
       layout.height = 440;
       layout.showlegend = true;
-      layout.legend = { font: { size: 11 } };
+      layout.legend = { font: { size: 11 + FONT_BUMP } };
       layout.margin.r = 8;
       var dims = rows.length ? Array.from(new Set(rows.map(function (row) { return row.dimensions; }))).sort(function (a, b) { return a - b; }) : [];
       layout.xaxis.tickvals = dims;
