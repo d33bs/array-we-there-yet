@@ -1,5 +1,6 @@
 """Tests for report generation."""
 
+import colorsys
 import re
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import pytest
 
 from array_we_there_yet.report import (
     FIGURE_IDS,
+    SERIES_COLORS,
     _ordered_backends,
     _parallelism_note,
     _time_summary_ratios,
@@ -681,3 +683,45 @@ def test_page_text_refers_only_to_sections_that_exist() -> None:
     assert references
     for title in references:
         assert title in titles, title
+
+
+def test_every_series_color_is_distinct_and_chromatic() -> None:
+    """Each backend has one chromatic color, distinct from every other.
+
+    Grey and black lines were hard to tell apart on the page, and a black
+    line follows the text color in dark mode. A backend's layouts share
+    its color, with the dash pattern telling them apart.
+    """
+    MIN_SATURATION = 0.3
+    MIN_LIGHTNESS = 0.25
+    MAX_LIGHTNESS = 0.8
+    MIN_HUE_GAP = 30
+    MIN_LIGHTNESS_GAP = 0.25
+
+    def hue_lightness_saturation(hex_color: str) -> tuple[float, float, float]:
+        value = hex_color.lstrip("#")
+        red, green, blue = (int(value[i : i + 2], 16) / 255 for i in (0, 2, 4))
+        hue, lightness, saturation = colorsys.rgb_to_hls(red, green, blue)
+        return hue * 360, lightness, saturation
+
+    color_backends = {}
+    for (backend, _layout), color in SERIES_COLORS.items():
+        owners = color_backends.setdefault(color, set())
+        owners.add(backend)
+    for color, owners in color_backends.items():
+        assert len(owners) == 1, f"{color} is shared by {sorted(owners)}"
+
+    unique_colors = list(color_backends)
+    for series_color in unique_colors:
+        _hue, lightness, saturation = hue_lightness_saturation(series_color)
+        assert saturation > MIN_SATURATION, f"achromatic: {series_color}"
+        assert MIN_LIGHTNESS < lightness < MAX_LIGHTNESS, f"washed out: {series_color}"
+
+    for first in range(len(unique_colors)):
+        for second in range(first + 1, len(unique_colors)):
+            hue_a, light_a, _ = hue_lightness_saturation(unique_colors[first])
+            hue_b, light_b, _ = hue_lightness_saturation(unique_colors[second])
+            hue_gap = min(abs(hue_a - hue_b), 360 - abs(hue_a - hue_b))
+            assert (
+                hue_gap > MIN_HUE_GAP or abs(light_a - light_b) > MIN_LIGHTNESS_GAP
+            ), f"too close: {unique_colors[first]} vs {unique_colors[second]}"

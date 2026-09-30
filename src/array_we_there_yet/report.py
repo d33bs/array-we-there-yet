@@ -100,20 +100,20 @@ BACKEND_PACKAGES = {
 }
 SERIES_COLORS = {
     ("csv", "delimited_array"): "#0072B2",
-    ("csv", "json_array"): "#D55E00",
+    ("csv", "json_array"): "#C0392B",
     ("parquet", "fixed_array"): "#009E73",
     ("duckdb", "duckdb_array"): "#CC79A7",
     ("zarr", "zarr_matrix"): "#56B4E9",
     ("tiledb", "tiledb_dense"): "#E69F00",
-    ("vortex", "fixed_array"): "#999999",
-    ("lance", "fixed_array"): "#000000",
+    ("vortex", "fixed_array"): "#9ACD32",
+    ("lance", "fixed_array"): "#9467BD",
     ("csv", "wide"): "#882255",
     ("parquet", "wide"): "#009E73",
     ("duckdb", "wide"): "#CC79A7",
     ("zarr", "wide"): "#56B4E9",
     ("tiledb", "wide"): "#E69F00",
-    ("vortex", "wide"): "#999999",
-    ("lance", "wide"): "#000000",
+    ("vortex", "wide"): "#9ACD32",
+    ("lance", "wide"): "#9467BD",
 }
 KEY_COLUMNS = ["dimensions", "operation", "operation_parameter"]
 CSV_WIDE_LABEL = "CSV wide"
