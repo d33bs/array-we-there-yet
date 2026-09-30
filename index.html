@@ -37,12 +37,12 @@
   }
 }
 * { box-sizing: border-box; }
-html { scroll-behavior: smooth; scroll-padding-top: 1rem; }
+html { scroll-behavior: smooth; scroll-padding-top: 1rem; font-size: calc(100% + 1pt); }
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font: 1rem/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 .wrap { max-width: var(--measure); margin: 0 auto; padding: 0 16px; }
 a { color: var(--accent); }
@@ -53,7 +53,7 @@ code {
   border-radius: 4px;
 }
 .masthead { border-bottom: 1px solid var(--line); padding: 2rem 0 1.25rem; }
-.masthead-top { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.5rem; }
+.masthead-top { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
 .masthead h1 {
   margin: 0; font-size: 2.2rem; line-height: 1.15; font-weight: 800;
   letter-spacing: -0.01em; color: var(--title-a);
@@ -127,13 +127,13 @@ select { font: inherit; background: var(--bg); color: var(--text); border: 1px s
 .layout-diagram svg { display: block; width: 100%; max-width: 620px; height: auto; }
 .layout-diagram rect { fill: var(--panel); stroke: var(--line); stroke-width: 1; }
 .layout-diagram .ld-cell { fill: var(--accent-soft); }
-.layout-diagram text { fill: var(--text); font-size: 13px; }
+.layout-diagram text { fill: var(--text); font-size: calc(13px + 1pt); }
 .layout-diagram .ld-heading { font-weight: 600; }
-.layout-diagram .ld-note { fill: var(--muted); font-size: 11px; }
-.layout-diagram .ld-vs { fill: var(--muted); font-size: 12px; font-style: italic; }
+.layout-diagram .ld-note { fill: var(--muted); font-size: calc(11px + 1pt); }
+.layout-diagram .ld-vs { fill: var(--muted); font-size: calc(12px + 1pt); font-style: italic; }
 .layout-diagram .ld-array {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10.5px;
+  font-size: calc(10.5px + 1pt);
 }
 .layout-diagram figcaption { margin-top: 0.4rem; font-size: 0.85rem; color: var(--muted); }
 
@@ -1642,6 +1642,7 @@ schema changes, vector search, or tool support.</li>
   var state = { logY: true };
   var redraws = []; // functions that draw one figure
   var CONFIG = { responsive: true, displaylogo: false, modeBarButtonsToRemove: ['lasso2d', 'select2d'] };
+  var FONT_BUMP = 4 / 3; // one typographic point in CSS pixels
 
   // ---------- helpers ----------
 
@@ -1695,12 +1696,12 @@ schema changes, vector search, or tool support.</li>
     var text = css('--text');
     var grid = css('--grid');
     return {
-      title: { text: title, font: { size: 13, color: text } },
+      title: { text: title, font: { size: 13 + FONT_BUMP, color: text } },
       margin: { l: 58, r: 10, t: 36, b: 46 },
       height: 290,
       paper_bgcolor: 'rgba(0,0,0,0)',
       plot_bgcolor: 'rgba(0,0,0,0)',
-      font: { color: text, size: 11 },
+      font: { color: text, size: 11 + FONT_BUMP },
       showlegend: false,
       hovermode: 'closest',
       xaxis: { gridcolor: grid, linecolor: grid, zerolinecolor: grid },
@@ -1749,7 +1750,7 @@ schema changes, vector search, or tool support.</li>
       layout.yaxis.showticklabels = false;
       layout.annotations = [{
         text: 'No layouts shown', showarrow: false, xref: 'paper', yref: 'paper', x: 0.5, y: 0.5,
-        font: { color: css('--muted'), size: 12 }
+        font: { color: css('--muted'), size: 12 + FONT_BUMP }
       }];
     }
   }
@@ -1915,7 +1916,7 @@ schema changes, vector search, or tool support.</li>
       var layout = baseLayout(title);
       layout.height = 440;
       layout.showlegend = true;
-      layout.legend = { font: { size: 11 } };
+      layout.legend = { font: { size: 11 + FONT_BUMP } };
       layout.margin.r = 8;
       var dims = rows.length ? Array.from(new Set(rows.map(function (row) { return row.dimensions; }))).sort(function (a, b) { return a - b; }) : [];
       layout.xaxis.tickvals = dims;
