@@ -1,0 +1,26 @@
+{
+  "timestamp_utc": "2026-10-01T22:00:04.035323+00:00",
+  "git_commit": "37678fb",
+  "platform": "macOS-26.7.1-arm64-arm-64bit",
+  "python": "3.11.13",
+  "zarr": "3.1.6",
+  "s3fs": "2026.9.0",
+  "rustfs_image_id": "sha256:8cc9801755448b71a786705ce76692c77e14936cccd87cf2fc31842e58f4d1ff",
+  "upstream": "http://127.0.0.1:9000",
+  "read_endpoint": "http://127.0.0.1:50475",
+  "latencies_ms": [
+    0
+  ],
+  "thread_limits": {
+    "arrow_cpu_threads": 1,
+    "arrow_io_threads": 1,
+    "duckdb_threads": 1,
+    "zarr_blosc_threads": 1,
+    "zarr_async_threads": 1,
+    "tiledb_concurrency_level": 1,
+    "lance": "library default",
+    "vortex": "library default"
+  },
+  "read_repetitions": 2,
+  "note": "Warm localhost RustFS; proxy delays every HTTP request. Response bytes exclude headers; no WAN or AWS S3."
+}

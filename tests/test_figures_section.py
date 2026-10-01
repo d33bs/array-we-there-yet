@@ -141,7 +141,7 @@ def test_the_text_refers_to_the_figures_that_depict_it() -> None:
     section = _section(sweep=_sweep())
 
     real_world = section[section.index("## Real-world example") :]
-    assert "[Figure 5](#figure-5) lets you change" in real_world
+    assert "[Figure 5](#figure-5) shows the time and egress cost" in real_world
     key_findings = section[section.index("### Key findings") :]
     assert "[Figure 2](#figure-2) shows these ratios" in key_findings
     scaling = section[section.index("### Scaling with row count") :]

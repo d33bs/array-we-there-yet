@@ -378,6 +378,10 @@ def sensitivity_table_markdown(table: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
+# Above this, rounding to one decimal would print -100%, which reads as zero.
+TOTAL_REDUCTION_CEILING = -99.951
+
+
 def _percent_change(ratio: float) -> str:
     """Return a signed percentage, and never a multiplier.
 
@@ -388,7 +392,10 @@ def _percent_change(ratio: float) -> str:
     if abs(percent) < 0.5:  # noqa: PLR2004
         return "0%"
     if percent <= -99.5:  # noqa: PLR2004
-        return f"{percent:.2f}".rstrip("0").rstrip(".") + "%"
+        # One decimal reads cleaner, but -99.98% must not round to -100%.
+        if round(percent, 1) <= TOTAL_REDUCTION_CEILING:
+            return f"{percent:.2f}%".rstrip("0").rstrip(".")
+        return f"{percent:.1f}%".replace(".0%", "%")
     if abs(percent) >= 100:  # noqa: PLR2004
         return f"{float(f'{percent:.2g}'):+,.0f}%"
     return f"{round(percent):+d}%"
@@ -572,8 +579,7 @@ FIGURE_CAPTIONS = {
     "real_world": (
         "Left: time for one use, split into download and read. Right: egress "
         "cost over the chosen number of uses. Lower is better in both panels. "
-        "Change the file size, the uses, the price, or the download speed to see "
-        "how the result moves. The starting values are a "
+        "Values use a "
         f"{EXAMPLE_DATASET_GB:g} GB file, {EXAMPLE_USES:,} uses, "
         f"${EXAMPLE_EGRESS_DOLLARS_PER_GB:.2f} per GB, and "
         f"{EXAMPLE_DOWNLOAD_MB_PER_SECOND} MB/s."
@@ -728,6 +734,16 @@ def render_results_section(  # noqa: PLR0913
         [
             "",
             "## Detailed results",
+            "",
+            (
+                "The figures above show every measurement at once. The rest of "
+                "this page slows down and checks the numbers behind them: the "
+                "per-backend table below, then how far each layout sits from a "
+                "plain NumPy file, how the results scale with row count, and how "
+                "sensitive they are to compression settings. If you only load "
+                "whole matrices, the summary above already has your answer. If "
+                "you slice by rows or features, the next sections matter."
+            ),
             "",
             "### Key findings",
             "",
@@ -1037,11 +1053,27 @@ def _main_finding(
         return text
     parts = [f"{name} in {_join_words(items)}" for name, items in groups.items()]
     if len(parts) > 1:
+        detail = "; ".join(f"it is {part}" for part in parts)
         return (
-            f"{text} Reading only {features} with the array-like layout gives "
-            "mixed results."
+            f"{text} Reading only {features}: {_projection_backends(groups)}."
+            f" The next bullets give the per-backend numbers - {detail}."
         )
     return f"{text} Reading only {features}, array-like layouts are {parts[0]}."
+
+
+def _projection_backends(groups: dict[str, list[str]]) -> str:
+    """Summarize which side each backend lands on, in plain counts."""
+    faster = groups.get("faster", [])
+    slower = groups.get("slower", [])
+    same = groups.get("about the same", [])
+    counts = []
+    if faster:
+        counts.append(f"faster in {len(faster)}")
+    if same:
+        counts.append(f"about the same in {len(same)}")
+    if slower:
+        counts.append(f"slower in {len(slower)}")
+    return ", ".join(counts) + " backends"
 
 
 def _matrix_bullet(
@@ -1074,7 +1106,15 @@ def _projection_bullet(groups: dict[str, list[str]], features: str) -> str:
         f"Reading {features} is {first_name} with the array-like layout in "
         f"{_join_words(first_items)}."
     )
-    return "- **Selecting a few features.** " + " ".join([first, *sentences[1:]])
+    text = "- **Selecting a few features.** " + " ".join([first, *sentences[1:]])
+    slower = groups.get("slower", [])
+    if any("Zarr" in item for item in slower):
+        text += (
+            " The Zarr matrix layout is the exception worth remembering: "
+            "chunked 2D arrays read whole matrices fast, but slicing a few "
+            "columns out of every chunk costs more than a wide layout does."
+        )
+    return text
 
 
 def _text_packing_bullet(summary: pd.DataFrame) -> str:
@@ -1092,11 +1132,17 @@ def _text_packing_bullet(summary: pd.DataFrame) -> str:
     faster = [_plain(op) for op in OPERATIONS if per_operation.get(op, 1) < 1]
     if not slower:
         return ""
+    # Two lists of at most three operations each, so the sentence stays short.
+    lead_operations = 3
     text = (
         "- **Text packing.** CSV packed arrays are slower than CSV wide for "
-        f"{_join_words(slower)}"
+        f"{_join_words(slower[:lead_operations])}"
     )
-    text += f", and faster only for {_join_words(faster)}." if faster else "."
+    if len(slower) > lead_operations:
+        text += f", and for {_join_words(slower[lead_operations:])}"
+    text += "."
+    if faster:
+        text += " Full read is the one exception, where they are faster."
     sizes = csv[csv["operation"] == "write"]["artifact_size_ratio"]
     if not sizes.empty:
         text += f" They are {_size_words(_geometric_mean(sizes))}."
@@ -2137,8 +2183,7 @@ def real_world_section(
             f"{features:,} features. A use is one download followed by one read "
             "into memory."
             + (
-                f" {_figure_link(figure_number)} lets you change the file size, "
-                "the number of uses, the price, and the download speed."
+                f" {_figure_link(figure_number)} shows the time and egress cost."
                 if figure_number is not None
                 else ""
             )

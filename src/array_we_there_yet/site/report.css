@@ -63,6 +63,7 @@ code {
 .lede p { margin: 0.5rem 0; }
 main { min-width: 0; padding: 0 0 4rem; }
 main h2 { margin: 2.75rem 0 0.75rem; padding-top: 1rem; border-top: 1px solid var(--line); font-size: 1.55rem; }
+main > h2:first-child { margin-top: 0; padding-top: 0; border-top: none; }
 main h3 { margin: 2rem 0 0.5rem; font-size: 1.2rem; }
 main p, main li { max-width: 60rem; }
 main blockquote {
@@ -102,11 +103,6 @@ label.toggle { display: inline-flex; gap: 0.3rem; align-items: center; color: va
 .facet-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr)); gap: 0.5rem; }
 .panel-plot { min-height: 280px; }
 .figure-error, .figure-fallback { color: var(--muted); font-style: italic; }
-.calc { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 0.75rem 1.25rem; margin: 0.5rem 0 1rem; padding: 0.75rem; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
-.calc label { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.85rem; color: var(--muted); }
-.calc output { color: var(--text); font-weight: 600; }
-.calc input[type="number"] { font: inherit; padding: 0.15rem 0.4rem; width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 4px; }
-.calc input[type="range"] { width: 100%; }
 .calc-headline { font-weight: 600; max-width: 60rem; }
 .calc-charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr)); gap: 0.5rem; }
 .controls-row { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; margin: 0.5rem 0; }

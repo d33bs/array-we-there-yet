@@ -15,9 +15,9 @@ method, and the limits of the benchmark.
 ## Summary
 
 Array-like layouts load a whole feature matrix much faster than wide layouts in
-most backends. Reading only a few features gives mixed results. The layouts also
-change file size, and so the time and egress cost of moving a dataset. The report
-gives the numbers.
+most backends. Reading only a few features is faster in some backends and
+slower in others. The layouts also change file size, and so the time and
+egress cost of moving a dataset. The report gives the numbers.
 
 ## What the benchmark measures
 

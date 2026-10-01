@@ -27,7 +27,9 @@ def test_quote_gives_the_range_and_leaves_the_detail_to_the_bullets() -> None:
     assert quote == (
         "> **Main finding.** Array-like layouts read whole feature matrices 4x to "
         "1,000x faster than wide layouts in 2 of 3 backends. Reading only 8 of "
-        "16 features with the array-like layout gives mixed results."
+        "16 features: faster in 1, about the same in 1, slower in 1 backends. "
+        "The next bullets give the per-backend numbers - it is faster in "
+        "Lance (10x); it is about the same in Parquet; it is slower in CSV (5x)."
     )
     text = "\n".join(lines)
     assert "faster with the array-like layout in Lance (10x)" in text

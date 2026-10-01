@@ -22,5 +22,11 @@
 - **Tuning.** The benchmark runs two profiles. Neither profile is tuned for the
   data. Other row-group sizes, chunk sizes, and codecs can change the results.
   Vortex, Lance, and DuckDB have no compact profile.
+- **Chunk size.** We tested four Zarr chunk shapes separately. For the widest
+  matrix, narrower feature chunks cut the eight-feature read from 27 ms to
+  11 ms, but slowed full reads and writes. They did not help for the
+  1,024-feature matrix. The main benchmark keeps its original chunk shape.
+  This check used warm local files, not S3. The method and results are in
+  `spikes/001-zarr-chunk-shapes/`.
 - **Scope.** The benchmark does not measure filters, updates, concurrent access,
   schema changes, vector search, or tool support.

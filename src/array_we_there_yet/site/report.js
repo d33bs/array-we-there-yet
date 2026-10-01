@@ -299,35 +299,6 @@
   // ---------- real-world calculator ----------
 
   function realWorld(container, spec) {
-    var inputs = {};
-    function field(id, label, value, min, max, step, log) {
-      var number = el('input', { type: 'number', id: 'rw-' + id, min: min, max: max, step: step, value: value });
-      var range = el('input', { type: 'range', 'aria-label': label + ' slider' });
-      var out = el('output', { text: '' });
-      function toRange(v) { return log ? 100 * Math.log10(v / min) / Math.log10(max / min) : v; }
-      function fromRange(v) { return log ? min * Math.pow(max / min, v / 100) : Number(v); }
-      range.min = log ? 0 : min;
-      range.max = log ? 100 : max;
-      range.step = log ? 0.5 : step;
-      range.value = toRange(value);
-      number.addEventListener('input', function () {
-        var v = parseFloat(number.value);
-        if (!isNaN(v)) { range.value = toRange(Math.min(Math.max(v, min), max)); update(); }
-      });
-      range.addEventListener('input', function () {
-        var v = fromRange(range.value);
-        number.value = log ? Number(v.toPrecision(3)) : v;
-        update();
-      });
-      inputs[id] = number;
-      return el('label', { text: label }, [number, range, out]);
-    }
-    var calc = el('div', { 'class': 'calc' }, [
-      field('size', 'File size (GB) for CSV wide', spec.datasetGb, 0.1, 1000, 0.1, true),
-      field('uses', 'Uses', spec.uses, 1, 100000, 1, true),
-      field('price', 'Egress price ($ per GB)', spec.egressDollarsPerGb, 0, 0.2, 0.005, false),
-      field('speed', 'Download speed (MB/s)', spec.downloadMbPerSecond, 10, 1000, 10, false)
-    ]);
     var headline = el('p', { 'class': 'calc-headline' });
     var charts = el('div', { 'class': 'calc-charts' });
     var timePlot = el('div', { 'class': 'panel-plot' });
@@ -335,14 +306,14 @@
     charts.appendChild(timePlot);
     charts.appendChild(costPlot);
     var table = el('div', { 'class': 'calc-table' });
-    [calc, headline, charts, table].forEach(function (node) { container.appendChild(node); });
+    [headline, charts, table].forEach(function (node) { container.appendChild(node); });
 
     function params() {
       return {
-        size: Math.max(parseFloat(inputs.size.value) || spec.datasetGb, 0.001),
-        uses: Math.max(parseFloat(inputs.uses.value) || 1, 1),
-        price: Math.max(parseFloat(inputs.price.value) || 0, 0),
-        speed: Math.max(parseFloat(inputs.speed.value) || 1, 1)
+        size: spec.datasetGb,
+        uses: spec.uses,
+        price: spec.egressDollarsPerGb,
+        speed: spec.downloadMbPerSecond
       };
     }
 
@@ -432,13 +403,7 @@
         return el('tr', {}, cells.map(function (c) { return el('td', { text: c }); }));
       })));
       table.replaceChildren(t);
-      Object.keys(inputs).forEach(function (id) {
-        var out = inputs[id].parentNode.querySelector('output');
-        out.textContent = ({ size: twoDigits(p.size) + ' GB', uses: Math.round(p.uses).toLocaleString('en-US'),
-          price: '$' + p.price.toFixed(3) + ' per GB', speed: Math.round(p.speed) + ' MB/s' })[id];
-      });
     }
-    var update = draw;
     shell(container, draw);
   }
 
